@@ -17,7 +17,7 @@ COPY ./.env.example ./.env
 COPY ./runWithProvider.js ./
 COPY ./Docker ./Docker
 RUN chmod +x ./Docker/scripts/* && dos2unix ./Docker/scripts/*
-RUN if [ "$DATABASE_ENABLED" = "true" ]; then ./Docker/scripts/generate_database.sh; fi
+RUN npx prisma generate --schema ./prisma/postgresql-schema.prisma
 RUN npm run build
 FROM node:20-alpine AS final
 RUN apk update && \
