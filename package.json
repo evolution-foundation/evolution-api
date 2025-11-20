@@ -60,7 +60,7 @@
     "amqplib": "^0.10.5",
     "audio-decode": "^2.2.3",
     "axios": "^1.7.9",
-    "baileys": "github:WhiskeySockets/Baileys#9e04cce8d3eeb16025283a57849cc83aa26c6dd1",
+    "baileys": "6.7.19",
     "class-validator": "^0.14.1",
     "compression": "^1.7.5",
     "cors": "^2.8.5",
@@ -127,8 +127,5 @@
     "tsconfig-paths": "^4.2.0",
     "tsx": "^4.20.3",
     "typescript": "^5.7.2"
-  },
-  "overrides": {
-    "libsignal": "github:whiskeysockets/libsignal-node#4d08331a833727c338c1a90041d17b870210dfae"
   }
 }
