@@ -2195,14 +2195,6 @@ export class BaileysStartupService extends ChannelStartupService {
         messageSent?.message?.ptvMessage ||
         messageSent?.message?.audioMessage;
 
-      if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled && !isIntegration) {
-        this.chatwootService.eventWhatsapp(
-          Events.SEND_MESSAGE,
-          { instanceName: this.instance.name, instanceId: this.instanceId },
-          messageRaw,
-        );
-      }
-
       if (this.configService.get<Openai>('OPENAI').ENABLED && messageRaw?.message?.audioMessage) {
         const openAiDefaultSettings = await this.prismaRepository.openaiSetting.findFirst({
           where: { instanceId: this.instanceId },
@@ -2214,9 +2206,29 @@ export class BaileysStartupService extends ChannelStartupService {
         }
       }
 
-      if (this.configService.get<Database>('DATABASE').SAVE_DATA.NEW_MESSAGE) {
-        const msg = await this.prismaRepository.message.create({ data: messageRaw });
+      const shouldSaveMessage = this.configService.get<Database>('DATABASE').SAVE_DATA.NEW_MESSAGE;
+      let msg;
 
+      if (shouldSaveMessage) {
+        msg = await this.prismaRepository.message.create({ data: messageRaw });
+      }
+
+      if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled && !isIntegration) {
+        // [WIDGET-WORKS] Run after DB save to avoid chatwootMessageId race and surface async Chatwoot failures
+        this.chatwootService
+          .eventWhatsapp(
+            Events.SEND_MESSAGE,
+            { instanceName: this.instance.name, instanceId: this.instanceId },
+            messageRaw,
+          )
+          .catch((error) => {
+            this.logger.error(
+              `[WIDGET-WORKS] Chatwoot sync failed for message ${messageRaw?.key?.id ?? 'unknown'}: ${error?.message}`,
+            );
+          });
+      }
+
+      if (shouldSaveMessage && msg) {
         if (isMedia && this.configService.get<S3>('S3').ENABLE) {
           try {
             const message: any = messageRaw;
