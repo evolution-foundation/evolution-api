@@ -5,6 +5,7 @@
 * [WIDGET-WORKS] Fix `PrismaClientValidationError` in `messages.update` (missing `Message` relation) by guarding `messageUpdate.create` calls.
 * [WIDGET-WORKS] Guard `messages.update` cache cleanup with a derived key and optional `MESSAGE_UPDATE_CACHE_DELETE_DISABLED` flag to prevent cache.delete crash-loops.
 * [WIDGET-WORKS] Save messages before Chatwoot sync in `/message/sendText` to avoid missing `chatwootMessageId` and log async sync failures.
+* [WIDGET-WORKS] Cache sent message keys in Baileys so WhatsApp echoes are ignored (prevents Chatwoot automation duplicates when `isIntegration=true`).
 * [WIDGET-WORKS] Skip Chatwoot sync in `messages.upsert` when a message key already has `chatwootMessageId` (handles Chatwoot automation echoes/duplicates).
 * [WIDGET-WORKS] Avoid dropping group conversations when Chatwoot `updateContact` fails by logging the error and continuing with the existing contact.
 

@@ -2212,6 +2212,16 @@ export class BaileysStartupService extends ChannelStartupService {
 
       const messageRaw = this.prepareMessage(messageSent);
 
+      // [WIDGET-WORKS] Cache sent message key so messages.upsert treats the WhatsApp echo as duplicate
+      try {
+        const messageKey = `${this.instance.id}_${messageRaw.key.id}`;
+        await this.baileysCache.set(messageKey, true, 5 * 60);
+      } catch (error) {
+        this.logger.warn(
+          `[WIDGET-WORKS] Failed to cache sent message ${messageRaw?.key?.id ?? 'unknown'}: ${error?.message}`,
+        );
+      }
+
       const isMedia =
         messageSent?.message?.imageMessage ||
         messageSent?.message?.videoMessage ||
