@@ -251,24 +251,48 @@ export class WAMonitoringService {
       }
 
       const clientName = this.configService.get<Database>('DATABASE').CONNECTION.CLIENT_NAME;
+      const clientNameTruncated = truncate(clientName, 100);
+
+      // Validação adicional para garantir que todos os campos estão dentro dos limites
+      const instanceData = {
+        id: data.instanceId,
+        name: instanceName,
+        ownerJid: truncate(data.ownerJid, 100),
+        profileName: truncate(data.profileName, 100),
+        profilePicUrl: truncate(data.profilePicUrl, 500),
+        connectionStatus:
+          data.integration && data.integration === Integration.WHATSAPP_BAILEYS ? 'close' : (data.status ?? 'open'),
+        number: truncate(data.number, 100),
+        integration: truncate(data.integration || Integration.WHATSAPP_BAILEYS, 100),
+        token: truncate(data.hash, 255),
+        clientName: clientNameTruncated,
+        businessId: truncate(data.businessId, 100),
+      };
+
+      this.logger.log({
+        message: 'Creating instance in database',
+        instanceName: instanceName,
+        instanceId: data.instanceId,
+        integration: instanceData.integration,
+        tokenLength: instanceData.token?.length || 0,
+      });
+
       await this.prismaRepository.instance.create({
-        data: {
-          id: data.instanceId,
-          name: instanceName,
-          ownerJid: truncate(data.ownerJid, 100),
-          profileName: truncate(data.profileName, 100),
-          profilePicUrl: truncate(data.profilePicUrl, 500),
-          connectionStatus:
-            data.integration && data.integration === Integration.WHATSAPP_BAILEYS ? 'close' : (data.status ?? 'open'),
-          number: truncate(data.number, 100),
-          integration: truncate(data.integration || Integration.WHATSAPP_BAILEYS, 100),
-          token: truncate(data.hash, 255),
-          clientName: truncate(clientName, 100),
-          businessId: truncate(data.businessId, 100),
-        },
+        data: instanceData,
+      });
+
+      this.logger.log({
+        message: 'Instance created successfully in database',
+        instanceName: instanceName,
+        instanceId: data.instanceId,
       });
     } catch (error) {
-      this.logger.error(error);
+      this.logger.error({
+        message: 'Error creating instance in database',
+        error: error instanceof Error ? error.message : String(error),
+        instanceName: data.instanceName,
+        instanceId: data.instanceId,
+      });
       throw error;
     }
   }
