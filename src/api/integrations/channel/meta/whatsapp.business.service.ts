@@ -1759,6 +1759,9 @@ export class BusinessStartupService extends ChannelStartupService {
   public async fetchLabels() {
     throw new BadRequestException('Method not available on WhatsApp Business API');
   }
+  public async syncLabels() {
+    throw new BadRequestException('Method not available on WhatsApp Business API');
+  }
   public async handleLabel() {
     throw new BadRequestException('Method not available on WhatsApp Business API');
   }
