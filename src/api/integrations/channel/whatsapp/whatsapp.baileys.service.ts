@@ -224,6 +224,12 @@ async function getVideoDuration(input: Buffer | string | Readable): Promise<numb
   return Math.round(parseFloat(duration));
 }
 
+function normalizeListType(listMessage?: proto.Message.IListMessage | null): void {
+  if (listMessage?.listType === proto.Message.ListMessage.ListType.PRODUCT_LIST) {
+    listMessage.listType = proto.Message.ListMessage.ListType.SINGLE_SELECT;
+  }
+}
+
 export class BaileysStartupService extends ChannelStartupService {
   private messageProcessor = new BaileysMessageProcessor();
 
@@ -675,15 +681,8 @@ export class BaileysStartupService extends ChannelStartupService {
       userDevicesCache: this.userDevicesCache,
       transactionOpts: { maxCommitRetries: 10, delayBetweenTriesMs: 3000 },
       patchMessageBeforeSending(message) {
-        if (
-          message.deviceSentMessage?.message?.listMessage?.listType === proto.Message.ListMessage.ListType.PRODUCT_LIST
-        ) {
-          message.deviceSentMessage.message.listMessage.listType = proto.Message.ListMessage.ListType.SINGLE_SELECT;
-        }
-
-        if (message.listMessage?.listType === proto.Message.ListMessage.ListType.PRODUCT_LIST) {
-          message.listMessage.listType = proto.Message.ListMessage.ListType.SINGLE_SELECT;
-        }
+        normalizeListType(message.deviceSentMessage?.message?.listMessage);
+        normalizeListType(message.listMessage);
 
         return message;
       },
