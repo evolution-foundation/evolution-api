@@ -16,7 +16,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const raw = $input.first().json;\nconst body = raw.body || raw;\n\nconst data = body.data || {};\nconst key = data.key || {};\nconst msg = data.message || {};\n\nconst text =\n  msg.conversation ||\n  (msg.extendedTextMessage && msg.extendedTextMessage.text) ||\n  (msg.imageMessage && msg.imageMessage.caption) ||\n  (msg.videoMessage && msg.videoMessage.caption) ||\n  (msg.documentMessage && msg.documentMessage.caption) ||\n  '';\n\nconst remoteJid = key.remoteJid || '';\nconst fromMe = key.fromMe || false;\nconst instance = body.instance || 'Teste';\n\nif (fromMe || !text.trim()) return [];\nif (remoteJid.includes('@g.us')) return [];\n\nconst phone = remoteJid\n  .replace('@s.whatsapp.net', '')\n  .replace('@c.us', '');\n\nreturn [{ json: { text: text.trim(), phone, remoteJid, instance } }];"
+        "jsCode": "// Suporta: n8n webhook typeVersion 1 (body direto) e typeVersion 2 (body aninhado)\nconst raw = $input.first().json;\nconst payload = (raw.body && typeof raw.body === 'object' && raw.body !== null) ? raw.body : raw;\n\n// Ignora eventos que nao sao mensagens recebidas\nconst event = payload.event || '';\nif (event !== '' && event !== 'messages.upsert') return [];\n\nconst data = payload.data || {};\nconst key = data.key || {};\nconst msg = data.message || {};\n\n// Extrai texto de todos os tipos de mensagem suportados\nconst text = (\n  msg.conversation ||\n  (msg.extendedTextMessage && msg.extendedTextMessage.text) ||\n  (msg.imageMessage && msg.imageMessage.caption) ||\n  (msg.videoMessage && msg.videoMessage.caption) ||\n  (msg.documentMessage && msg.documentMessage.caption) ||\n  ''\n);\n\nconst remoteJid = key.remoteJid || '';\nconst fromMe = key.fromMe === true;\nconst instance = payload.instance || 'Teste';\n\n// Filtra: mensagem propria, texto vazio, grupo\nif (fromMe) return [];\nif (!text.trim()) return [];\nif (remoteJid.includes('@g.us')) return [];\n\nconst phone = remoteJid\n  .replace('@s.whatsapp.net', '')\n  .replace('@c.us', '');\n\nreturn [{ json: { text: text.trim(), phone: phone, remoteJid: remoteJid, instance: instance } }];"
       },
       "id": "24a967e7-7602-4f55-bea1-a4dff46d1330",
       "name": "Parse Message",
@@ -28,15 +28,15 @@
       "parameters": {
         "conditions": {
           "options": {
-            "caseSensitive": true,
+            "caseSensitive": false,
             "leftValue": "",
-            "typeValidation": "strict",
+            "typeValidation": "loose",
             "version": 1
           },
           "conditions": [
             {
               "id": "cond-alicia",
-              "leftValue": "={{ $json.text.toLowerCase() }}",
+              "leftValue": "={{ $json.text }}",
               "rightValue": "alicia",
               "operator": {
                 "type": "string",
@@ -57,7 +57,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json;\nconst text = (input.text || '').toLowerCase();\nconst now = new Date();\n\nconst fmt = function(d) { return d.toISOString().split('T')[0]; };\nconst addDays = function(n) {\n  const d = new Date(now);\n  d.setDate(d.getDate() + n);\n  return fmt(d);\n};\n\nconst dow = now.getDay();\nconst daysToMon = dow === 0 ? 6 : dow - 1;\nconst monday = new Date(now);\nmonday.setDate(now.getDate() - daysToMon);\n\nconst clientMap = {\n  'antonio neto': { id: 'act_497795903676192', nome: 'Antonio Neto' },\n  'antonio': { id: 'act_497795903676192', nome: 'Antonio Neto' },\n  'gabriel jacinto': { id: 'act_2493856707309984', nome: 'Gabriel Jacinto' },\n  'gabriel': { id: 'act_2493856707309984', nome: 'Gabriel Jacinto' },\n  'dani escudero': { id: 'act_2145598605527232', nome: 'Dani Escudero' },\n  'dani': { id: 'act_2145598605527232', nome: 'Dani Escudero' },\n  'agro': { id: 'act_929521557422139', nome: 'Agro' },\n  'escola de musica': { id: 'act_544347952854095', nome: 'Escola de Musica' },\n  'escola': { id: 'act_544347952854095', nome: 'Escola de Musica' },\n  'panmalhas': { id: 'act_1509005182799187', nome: 'Panmalhas' },\n  'gfix store': { id: 'act_2811791829124905', nome: 'GFiX Store' },\n  'gfix': { id: 'act_2811791829124905', nome: 'GFiX Store' },\n  'arte em gelo': { id: 'act_5585082641598366', nome: 'Arte em Gelo' },\n  'arte': { id: 'act_5585082641598366', nome: 'Arte em Gelo' },\n  'itag tecnologia': { id: 'act_738466861151636', nome: 'ITAG Tecnologia' },\n  'itag': { id: 'act_738466861151636', nome: 'ITAG Tecnologia' },\n  'hi dogz': { id: 'act_873195821346004', nome: 'Hi Dogz' },\n  'dogz': { id: 'act_873195821346004', nome: 'Hi Dogz' },\n  'batata bistro': { id: 'act_1673012226810411', nome: 'Batata Bistro' },\n  'batata': { id: 'act_1673012226810411', nome: 'Batata Bistro' },\n  'caribbean bronze': { id: 'act_1082397873705862', nome: 'Caribbean Bronze' },\n  'caribbean': { id: 'act_1082397873705862', nome: 'Caribbean Bronze' },\n  'larissa kelleter': { id: 'act_738280412237298', nome: 'Larissa Kelleter' },\n  'larissa': { id: 'act_738280412237298', nome: 'Larissa Kelleter' }\n};\n\nconst isRelatorio = text.includes('relat');\n\nvar clientFound = null;\nvar sortedKeys = Object.keys(clientMap).sort(function(a, b) { return b.length - a.length; });\nfor (var i = 0; i < sortedKeys.length; i++) {\n  if (text.includes(sortedKeys[i])) {\n    clientFound = clientMap[sortedKeys[i]];\n    break;\n  }\n}\n\nconst today = fmt(now);\nconst yesterday = addDays(-1);\nconst last7Start = addDays(-7);\nconst last7End = yesterday;\nconst isRelatorioWithClient = isRelatorio && clientFound !== null;\n\nreturn [{\n  json: {\n    text: input.text,\n    phone: input.phone,\n    remoteJid: input.remoteJid,\n    instance: input.instance,\n    today: today,\n    yesterday: yesterday,\n    weekStart: fmt(monday),\n    last7: last7Start,\n    last30: addDays(-30),\n    last7Start: last7Start,\n    last7End: last7End,\n    metaToken: 'EAAeVLzZANk8oBQ79Ue5UimCCCYL9uNZCH9EZA7vZAJtqB5B9aQ6mO53EnUI1b8Cskpq9tRsYZAaDKvZB1kLZABjbqgwi3aenhyPnAtQkeineasNmaZA7vue9ndlaErc59UFZBaMBeDnBC8ZBpXtn9PdUP4OMQvkd53QZAL1jI9SC49WGZCvgopdZABkhGKCEuVStyYGRfYPrlhksx7HHkqZBNWo5gMLhREik5hvkp1JA7X',\n    isRelatorio: isRelatorio,\n    isRelatorioWithClient: isRelatorioWithClient,\n    clientFound: clientFound ? clientFound.id : null,\n    clientNome: clientFound ? clientFound.nome : null\n  }\n}];"
+        "jsCode": "const input = $input.first().json;\nconst text = (input.text || '').toLowerCase();\nconst now = new Date();\n\nfunction fmt(d) { return d.toISOString().split('T')[0]; }\nfunction addDays(n) {\n  var d = new Date(now);\n  d.setDate(d.getDate() + n);\n  return fmt(d);\n}\n\nvar dow = now.getDay();\nvar daysToMon = (dow === 0) ? 6 : (dow - 1);\nvar monday = new Date(now);\nmonday.setDate(now.getDate() - daysToMon);\n\nvar clientMap = [\n  { keys: ['antonio neto', 'antonio'], id: 'act_497795903676192', nome: 'Antonio Neto' },\n  { keys: ['gabriel jacinto', 'gabriel'], id: 'act_2493856707309984', nome: 'Gabriel Jacinto' },\n  { keys: ['dani escudero', 'dani'], id: 'act_2145598605527232', nome: 'Dani Escudero' },\n  { keys: ['agro'], id: 'act_929521557422139', nome: 'Agro' },\n  { keys: ['escola de musica', 'escola de música', 'escola'], id: 'act_544347952854095', nome: 'Escola de Musica' },\n  { keys: ['panmalhas'], id: 'act_1509005182799187', nome: 'Panmalhas' },\n  { keys: ['gfix store', 'gfix'], id: 'act_2811791829124905', nome: 'GFiX Store' },\n  { keys: ['arte em gelo', 'arte em'], id: 'act_5585082641598366', nome: 'Arte em Gelo' },\n  { keys: ['itag tecnologia', 'itag'], id: 'act_738466861151636', nome: 'ITAG Tecnologia' },\n  { keys: ['hi dogz', 'dogz'], id: 'act_873195821346004', nome: 'Hi Dogz' },\n  { keys: ['batata bistro', 'batata bistrô', 'batata'], id: 'act_1673012226810411', nome: 'Batata Bistro' },\n  { keys: ['caribbean bronze', 'caribbean'], id: 'act_1082397873705862', nome: 'Caribbean Bronze' },\n  { keys: ['larissa kelleter', 'larissa'], id: 'act_738280412237298', nome: 'Larissa Kelleter' }\n];\n\n// Ordena por comprimento decrescente de chaves para priorizar matches mais especificos\nclientMap.sort(function(a, b) {\n  return b.keys[0].length - a.keys[0].length;\n});\n\nvar isRelatorio = text.indexOf('relat') !== -1;\n\nvar clientFound = null;\nfor (var i = 0; i < clientMap.length; i++) {\n  var entry = clientMap[i];\n  for (var j = 0; j < entry.keys.length; j++) {\n    if (text.indexOf(entry.keys[j]) !== -1) {\n      clientFound = entry;\n      break;\n    }\n  }\n  if (clientFound) break;\n}\n\nvar today = fmt(now);\nvar yesterday = addDays(-1);\nvar last7Start = addDays(-7);\nvar last7End = yesterday;\nvar isRelatorioWithClient = (isRelatorio && clientFound !== null);\n\nreturn [{\n  json: {\n    text: input.text,\n    phone: input.phone,\n    remoteJid: input.remoteJid,\n    instance: input.instance,\n    today: today,\n    yesterday: yesterday,\n    weekStart: fmt(monday),\n    last7: last7Start,\n    last30: addDays(-30),\n    last7Start: last7Start,\n    last7End: last7End,\n    metaToken: 'EAAeVLzZANk8oBQ79Ue5UimCCCYL9uNZCH9EZA7vZAJtqB5B9aQ6mO53EnUI1b8Cskpq9tRsYZAaDKvZB1kLZABjbqgwi3aenhyPnAtQkeineasNmaZA7vue9ndlaErc59UFZBaMBeDnBC8ZBpXtn9PdUP4OMQvkd53QZAL1jI9SC49WGZCvgopdZABkhGKCEuVStyYGRfYPrlhksx7HHkqZBNWo5gMLhREik5hvkp1JA7X',\n    isRelatorio: isRelatorio,\n    isRelatorioWithClient: isRelatorioWithClient,\n    clientFound: clientFound ? clientFound.id : null,\n    clientNome: clientFound ? clientFound.nome : null\n  }\n}];"
       },
       "id": "5b953b43-14ca-4ed3-b8da-3ec455f58b92",
       "name": "Calcular Datas",
@@ -71,17 +71,18 @@
           "options": {
             "caseSensitive": true,
             "leftValue": "",
-            "typeValidation": "strict",
+            "typeValidation": "loose",
             "version": 1
           },
           "conditions": [
             {
               "id": "cond-relatorio",
               "leftValue": "={{ $json.isRelatorioWithClient }}",
-              "rightValue": true,
+              "rightValue": "true",
               "operator": {
-                "type": "boolean",
-                "operation": "equals"
+                "type": "string",
+                "operation": "equals",
+                "singleValue": true
               }
             }
           ],
@@ -131,7 +132,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const metaData = $input.first().json;\nconst ctx = $('Calcular Datas').first().json;\nconst campaigns = metaData.data || [];\n\nfunction fmtMoney(val) {\n  var n = parseFloat(val) || 0;\n  var fixed = n.toFixed(2);\n  var parts = fixed.split('.');\n  parts[0] = parts[0].replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');\n  return parts[0] + ',' + parts[1];\n}\n\nfunction fmtNum(val) {\n  var n = parseInt(val) || 0;\n  return String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');\n}\n\nfunction fmtBR(dateStr) {\n  var d = new Date(dateStr + 'T12:00:00Z');\n  return String(d.getUTCDate()).padStart(2, '0') + '/' + String(d.getUTCMonth() + 1).padStart(2, '0');\n}\n\nif (!campaigns.length) {\n  return [{ json: { phone: ctx.phone, output: 'Sem dados para *' + (ctx.clientNome || '').toUpperCase() + '* nos ultimos 7 dias.' } }];\n}\n\nvar purchaseAccountIds = ['act_873195821346004', 'act_1673012226810411'];\nvar isPurchase = purchaseAccountIds.indexOf(ctx.clientFound) !== -1;\n\nvar totalSpend = 0;\nvar totalImpressions = 0;\nvar totalClicks = 0;\n\nfor (var i = 0; i < campaigns.length; i++) {\n  totalSpend += parseFloat(campaigns[i].spend || '0');\n  totalImpressions += parseInt(campaigns[i].impressions || '0');\n  totalClicks += parseInt(campaigns[i].clicks || '0');\n}\n\nvar clientNameUpper = (ctx.clientNome || '').toUpperCase();\nvar reportText;\n\nif (isPurchase) {\n  var totalPurchases = 0;\n  for (var j = 0; j < campaigns.length; j++) {\n    var actions = campaigns[j].actions || [];\n    for (var k = 0; k < actions.length; k++) {\n      if (actions[k].action_type === 'purchase' || actions[k].action_type === 'offsite_conversion.fb_pixel_purchase') {\n        totalPurchases += parseInt(actions[k].value) || 0;\n      }\n    }\n  }\n  var cpp = totalPurchases > 0 ? totalSpend / totalPurchases : 0;\n  reportText =\n    '*' + clientNameUpper + '*\\n\\n' +\n    '_\\ud83d\\udcc6 ' + fmtBR(ctx.last7Start) + ' a ' + fmtBR(ctx.last7End) + ' (ultimos 7 dias)_\\n\\n' +\n    '*Meta Ads*\\n\\n' +\n    'Impressoes: ' + fmtNum(totalImpressions) + '\\n\\n' +\n    'Cliques: ' + fmtNum(totalClicks) + '\\n\\n' +\n    'Vendas: ' + totalPurchases + '\\n\\n' +\n    'Custo por venda: R$ ' + fmtMoney(cpp) + '\\n\\n' +\n    '*INVESTIMENTO TOTAL: R$ ' + fmtMoney(totalSpend) + '*';\n} else {\n  var LEAD_TYPES = [\n    'lead',\n    'onsite_conversion.lead_grouped',\n    'onsite_conversion.messaging_conversation_started_7d',\n    'onsite_conversion.total_messaging_connection'\n  ];\n  var leadSpend = 0;\n  var totalLeads = 0;\n  for (var j = 0; j < campaigns.length; j++) {\n    var actions = campaigns[j].actions || [];\n    for (var k = 0; k < actions.length; k++) {\n      if (LEAD_TYPES.indexOf(actions[k].action_type) !== -1) {\n        leadSpend += parseFloat(campaigns[j].spend || '0');\n        totalLeads += parseInt(actions[k].value) || 0;\n        break;\n      }\n    }\n  }\n  var cpl = totalLeads > 0 ? leadSpend / totalLeads : 0;\n  reportText =\n    '*' + clientNameUpper + '*\\n\\n' +\n    '_\\ud83d\\udcc6 ' + fmtBR(ctx.last7Start) + ' a ' + fmtBR(ctx.last7End) + ' (ultimos 7 dias)_\\n\\n' +\n    '*Meta Ads*\\n\\n' +\n    'Impressoes: ' + fmtNum(totalImpressions) + '\\n\\n' +\n    'Cliques: ' + fmtNum(totalClicks) + '\\n\\n' +\n    'Leads: ' + totalLeads + '\\n\\n' +\n    'Custo por lead: R$ ' + fmtMoney(cpl) + '\\n\\n' +\n    '*INVESTIMENTO TOTAL: R$ ' + fmtMoney(totalSpend) + '*';\n}\n\nreturn [{ json: { phone: ctx.phone, output: reportText } }];"
+        "jsCode": "const metaData = $input.first().json;\nconst ctx = $('Calcular Datas').first().json;\nconst campaigns = metaData.data || [];\n\nfunction fmtMoney(val) {\n  var n = parseFloat(val) || 0;\n  var fixed = n.toFixed(2);\n  var parts = fixed.split('.');\n  parts[0] = parts[0].replace(/(\\d)(?=(\\d{3})+$)/g, '$1.');\n  return parts[0] + ',' + parts[1];\n}\n\nfunction fmtNum(val) {\n  var n = parseInt(val) || 0;\n  return String(n).replace(/(\\d)(?=(\\d{3})+$)/g, '$1.');\n}\n\nfunction fmtBR(dateStr) {\n  var d = new Date(dateStr + 'T12:00:00Z');\n  return String(d.getUTCDate()).padStart(2, '0') + '/' + String(d.getUTCMonth() + 1).padStart(2, '0');\n}\n\nif (!campaigns.length) {\n  return [{ json: {\n    phone: ctx.phone,\n    output: 'Sem dados de campanhas para *' + (ctx.clientNome || '').toUpperCase() + '* nos ultimos 7 dias.'\n  } }];\n}\n\nvar purchaseIds = ['act_873195821346004', 'act_1673012226810411'];\nvar isPurchase = purchaseIds.indexOf(ctx.clientFound) !== -1;\n\nvar totalSpend = 0;\nvar totalImpressions = 0;\nvar totalClicks = 0;\n\nfor (var i = 0; i < campaigns.length; i++) {\n  totalSpend += parseFloat(campaigns[i].spend || '0');\n  totalImpressions += parseInt(campaigns[i].impressions || '0');\n  totalClicks += parseInt(campaigns[i].clicks || '0');\n}\n\nvar clientUpper = (ctx.clientNome || '').toUpperCase();\nvar dateRange = '_\\ud83d\\udcc6 ' + fmtBR(ctx.last7Start) + ' a ' + fmtBR(ctx.last7End) + ' (ultimos 7 dias)_';\nvar reportText;\n\nif (isPurchase) {\n  var totalPurchases = 0;\n  for (var i = 0; i < campaigns.length; i++) {\n    var acts = campaigns[i].actions || [];\n    for (var k = 0; k < acts.length; k++) {\n      if (acts[k].action_type === 'purchase' || acts[k].action_type === 'offsite_conversion.fb_pixel_purchase') {\n        totalPurchases += parseInt(acts[k].value) || 0;\n      }\n    }\n  }\n  var cpp = totalPurchases > 0 ? totalSpend / totalPurchases : 0;\n  reportText =\n    '*' + clientUpper + '*' + '\\n\\n' +\n    dateRange + '\\n\\n' +\n    '*Meta Ads*' + '\\n\\n' +\n    'Impressoes: ' + fmtNum(totalImpressions) + '\\n\\n' +\n    'Cliques: ' + fmtNum(totalClicks) + '\\n\\n' +\n    'Vendas: ' + totalPurchases + '\\n\\n' +\n    'Custo por venda: R$ ' + fmtMoney(cpp) + '\\n\\n' +\n    '*INVESTIMENTO TOTAL: R$ ' + fmtMoney(totalSpend) + '*';\n} else {\n  var LEAD_TYPES = ['lead', 'onsite_conversion.lead_grouped', 'onsite_conversion.messaging_conversation_started_7d', 'onsite_conversion.total_messaging_connection'];\n  var leadSpend = 0;\n  var totalLeads = 0;\n  for (var i = 0; i < campaigns.length; i++) {\n    var acts = campaigns[i].actions || [];\n    for (var k = 0; k < acts.length; k++) {\n      if (LEAD_TYPES.indexOf(acts[k].action_type) !== -1) {\n        leadSpend += parseFloat(campaigns[i].spend || '0');\n        totalLeads += parseInt(acts[k].value) || 0;\n        break;\n      }\n    }\n  }\n  var cpl = totalLeads > 0 ? leadSpend / totalLeads : 0;\n  reportText =\n    '*' + clientUpper + '*' + '\\n\\n' +\n    dateRange + '\\n\\n' +\n    '*Meta Ads*' + '\\n\\n' +\n    'Impressoes: ' + fmtNum(totalImpressions) + '\\n\\n' +\n    'Cliques: ' + fmtNum(totalClicks) + '\\n\\n' +\n    'Leads: ' + totalLeads + '\\n\\n' +\n    'Custo por lead: R$ ' + fmtMoney(cpl) + '\\n\\n' +\n    '*INVESTIMENTO TOTAL: R$ ' + fmtMoney(totalSpend) + '*';\n}\n\nreturn [{ json: { phone: ctx.phone, output: reportText } }];"
       },
       "id": "2b3745d9-82ef-4d9a-aa8d-db402408a07e",
       "name": "Formatar Relatorio",
@@ -211,7 +212,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const metaResp = $input.first().json;\nconst ctx = $('Calcular Datas').first().json;\nconst allAccounts = metaResp.data || [];\nconst accountsList = allAccounts.map(function(a) {\n  var status = a.account_status === 1 ? 'Ativa' : 'Inativa';\n  return '- ' + a.name + ' | ID: ' + a.id + ' | ' + a.currency + ' | ' + status;\n}).join('\\n') || 'Nenhuma conta encontrada';\nreturn [{ json: {\n  text: ctx.text,\n  phone: ctx.phone,\n  remoteJid: ctx.remoteJid,\n  instance: ctx.instance,\n  today: ctx.today,\n  yesterday: ctx.yesterday,\n  weekStart: ctx.weekStart,\n  last7: ctx.last7,\n  last30: ctx.last30,\n  last7Start: ctx.last7Start,\n  last7End: ctx.last7End,\n  metaToken: ctx.metaToken,\n  isRelatorio: ctx.isRelatorio,\n  isRelatorioWithClient: ctx.isRelatorioWithClient,\n  clientFound: ctx.clientFound,\n  clientNome: ctx.clientNome,\n  accounts: allAccounts,\n  accountsList: accountsList\n} }];"
+        "jsCode": "const metaResp = $input.first().json;\nconst ctx = $('Calcular Datas').first().json;\nconst allAccounts = metaResp.data || [];\nconst accountsList = allAccounts.map(function(a) {\n  var status = a.account_status === 1 ? 'Ativa' : 'Inativa';\n  return '- ' + a.name + ' | ID: ' + a.id + ' | ' + status;\n}).join('\\n') || 'Nenhuma conta encontrada';\nreturn [{ json: {\n  text: ctx.text,\n  phone: ctx.phone,\n  remoteJid: ctx.remoteJid,\n  instance: ctx.instance,\n  today: ctx.today,\n  yesterday: ctx.yesterday,\n  weekStart: ctx.weekStart,\n  last7: ctx.last7,\n  last30: ctx.last30,\n  last7Start: ctx.last7Start,\n  last7End: ctx.last7End,\n  metaToken: ctx.metaToken,\n  isRelatorio: ctx.isRelatorio,\n  isRelatorioWithClient: ctx.isRelatorioWithClient,\n  clientFound: ctx.clientFound,\n  clientNome: ctx.clientNome,\n  accounts: allAccounts,\n  accountsList: accountsList\n} }];"
       },
       "id": "9c2de825-ffbd-4870-b0e5-3f4a72c6c7b1",
       "name": "Montar Contexto",
@@ -224,7 +225,7 @@
         "promptType": "define",
         "text": "={{ $json.text }}",
         "options": {
-          "systemMessage": "=Voce e Alicia, assistente especializada em Meta Ads. Ajuda gestores de trafego a analisar metricas de campanhas.\n\nDATA ATUAL: {{ $json.today }}\nONTEM: {{ $json.yesterday }}\nINICIO DA SEMANA: {{ $json.weekStart }}\n7 DIAS ATRAS: {{ $json.last7 }}\n30 DIAS ATRAS: {{ $json.last30 }}\n\nMAPEAMENTO CLIENTES - CONTAS:\n- Antonio Neto = act_497795903676192\n- Gabriel Jacinto = act_2493856707309984\n- Dani Escudero = act_2145598605527232\n- Agro = act_929521557422139\n- Escola de Musica = act_544347952854095\n- Panmalhas = act_1509005182799187\n- GFiX Store = act_2811791829124905\n- Arte em Gelo = act_5585082641598366\n- ITAG Tecnologia = act_738466861151636\n- Hi Dogz = act_873195821346004\n- Batata Bistro = act_1673012226810411\n- Caribbean Bronze = act_1082397873705862\n- Larissa Kelleter = act_738280412237298\n\nCONTAS DISPONIVEIS:\n{{ $json.accountsList }}\n\nREGRAS:\n1. Aceite nomes parciais: 'itag'=ITAG, 'batata'=Batata Bistro, 'gfix'=GFiX, 'caribbean'=Caribbean Bronze\n2. Se sem cliente especifico, busque todas as contas ativas\n3. date_presets: today, yesterday, this_week_mon_today, last_7d, last_14d, last_30d, last_month\n4. Para LEADS: action_type = 'lead' OU 'onsite_conversion.lead_grouped'\n5. CPL = gasto / leads\n6. Budgets em CENTAVOS - divida por 100\n7. Responda SEMPRE em portugues\n8. Use emojis\n\nFORMATO DO RELATORIO:\n*NOME DO CLIENTE EM MAIUSCULAS*\n\n_data inicio a data fim (ultimos 7 dias)_\n\n*Meta Ads*\n\nImpressoes: X.XXX\n\nCliques: X.XXX\n\nLeads: XX\n\nCusto por lead: R$ XX,XX\n\n*INVESTIMENTO TOTAL: R$ X.XXX,XX*\n\nPara Hi Dogz e Batata Bistro usar Vendas e Custo por venda."
+          "systemMessage": "=Voce e Alicia, assistente especializada em Meta Ads. Ajuda gestores de trafego a analisar metricas.\n\nDATA ATUAL: {{ $json.today }}\nONTEM: {{ $json.yesterday }}\nINICIO DA SEMANA: {{ $json.weekStart }}\n7 DIAS ATRAS: {{ $json.last7 }}\n30 DIAS ATRAS: {{ $json.last30 }}\n\nMAPEAMENTO CLIENTES:\n- Antonio Neto = act_497795903676192\n- Gabriel Jacinto = act_2493856707309984\n- Dani Escudero = act_2145598605527232\n- Agro = act_929521557422139\n- Escola de Musica = act_544347952854095\n- Panmalhas = act_1509005182799187\n- GFiX Store = act_2811791829124905\n- Arte em Gelo = act_5585082641598366\n- ITAG Tecnologia = act_738466861151636\n- Hi Dogz = act_873195821346004\n- Batata Bistro = act_1673012226810411\n- Caribbean Bronze = act_1082397873705862\n- Larissa Kelleter = act_738280412237298\n\nCONTAS:\n{{ $json.accountsList }}\n\nREGRAS:\n1. Aceite nomes parciais: itag, batata, gfix, caribbean, larissa, etc\n2. Se sem cliente, busque todas as ativas\n3. date_presets validos: today, yesterday, this_week_mon_today, last_7d, last_14d, last_30d\n4. Leads: action_type = lead OU onsite_conversion.lead_grouped\n5. CPL = gasto / leads\n6. Budgets em CENTAVOS - divida por 100\n7. Responda em portugues\n8. Use emojis\n\nFORMATO RELATORIO:\n*CLIENTE EM MAIUSCULAS*\n\n_data a data (ultimos 7 dias)_\n\n*Meta Ads*\n\nImpressoes: X.XXX\n\nCliques: X.XXX\n\nLeads: XX (ou Vendas para Hi Dogz e Batata Bistro)\n\nCusto por lead: R$ XX,XX\n\n*INVESTIMENTO TOTAL: R$ X.XXX,XX*"
         }
       },
       "id": "36e08f36-8634-478d-a32c-8bf22671531e",
@@ -256,8 +257,8 @@
     {
       "parameters": {
         "name": "buscar_insights",
-        "description": "Busca metricas/insights do Meta Ads. Use para: gasto (spend), leads (actions), impressoes, cliques, CTR, CPC, alcance. Envie JSON com: object_id (ID da conta ex: act_123456 OU ID de campanha), date_preset (today/yesterday/this_week_mon_today/last_7d/last_14d/last_30d/last_month), fields (ex: spend,impressions,clicks,ctr,cpc,actions,reach), level opcional (account/campaign/adset/ad).",
-        "jsCode": "var params;\ntry { params = JSON.parse(query); } catch(e) { return 'Erro: envie JSON com object_id e date_preset'; }\nvar token = 'EAAeVLzZANk8oBQ79Ue5UimCCCYL9uNZCH9EZA7vZAJtqB5B9aQ6mO53EnUI1b8Cskpq9tRsYZAaDKvZB1kLZABjbqgwi3aenhyPnAtQkeineasNmaZA7vue9ndlaErc59UFZBaMBeDnBC8ZBpXtn9PdUP4OMQvkd53QZAL1jI9SC49WGZCvgopdZABkhGKCEuVStyYGRfYPrlhksx7HHkqZBNWo5gMLhREik5hvkp1JA7X';\nvar objectId = params.object_id;\nvar datePreset = params.date_preset || 'today';\nvar fields = params.fields || 'spend,impressions,clicks,ctr,cpc,actions,reach,cost_per_action_type';\nvar level = params.level || '';\nif (!objectId) return 'Erro: object_id e obrigatorio';\nvar url = 'https://graph.facebook.com/v19.0/' + objectId + '/insights?date_preset=' + encodeURIComponent(datePreset) + '&fields=' + encodeURIComponent(fields) + '&access_token=' + token;\nif (level) url += '&level=' + encodeURIComponent(level);\ntry {\n  var res = await fetch(url);\n  var data = await res.json();\n  if (data.error) return 'Erro Meta API: ' + data.error.message + ' (codigo: ' + data.error.code + ')';\n  if (!data.data || data.data.length === 0) return 'Nenhum dado encontrado para o periodo solicitado.';\n  return JSON.stringify(data.data);\n} catch(e) { return 'Erro de conexao: ' + e.message; }"
+        "description": "Busca metricas do Meta Ads. Envie JSON com: object_id (ID da conta ex: act_123456), date_preset (today/yesterday/last_7d/last_30d), fields (spend,impressions,clicks,ctr,cpc,actions,reach), level opcional (account/campaign/adset/ad).",
+        "jsCode": "var params;\ntry { params = JSON.parse(query); } catch(e) { return 'Erro: JSON invalido. Envie object_id e date_preset'; }\nvar token = 'EAAeVLzZANk8oBQ79Ue5UimCCCYL9uNZCH9EZA7vZAJtqB5B9aQ6mO53EnUI1b8Cskpq9tRsYZAaDKvZB1kLZABjbqgwi3aenhyPnAtQkeineasNmaZA7vue9ndlaErc59UFZBaMBeDnBC8ZBpXtn9PdUP4OMQvkd53QZAL1jI9SC49WGZCvgopdZABkhGKCEuVStyYGRfYPrlhksx7HHkqZBNWo5gMLhREik5hvkp1JA7X';\nvar objectId = params.object_id;\nvar datePreset = params.date_preset || 'today';\nvar fields = params.fields || 'spend,impressions,clicks,ctr,cpc,actions,reach';\nvar level = params.level || '';\nif (!objectId) return 'Erro: object_id obrigatorio';\nvar url = 'https://graph.facebook.com/v19.0/' + objectId + '/insights?date_preset=' + encodeURIComponent(datePreset) + '&fields=' + encodeURIComponent(fields) + '&access_token=' + token;\nif (level) url += '&level=' + encodeURIComponent(level);\ntry {\n  var res = await fetch(url);\n  var data = await res.json();\n  if (data.error) return 'Erro Meta: ' + data.error.message;\n  if (!data.data || data.data.length === 0) return 'Sem dados para o periodo.';\n  return JSON.stringify(data.data);\n} catch(e) { return 'Erro conexao: ' + e.message; }"
       },
       "id": "13abddfb-207b-4d02-aa60-c7b8658c7860",
       "name": "Tool: Buscar Insights",
@@ -268,8 +269,8 @@
     {
       "parameters": {
         "name": "listar_campanhas",
-        "description": "Lista todas as campanhas de uma conta de anuncios. Envie JSON com: account_id (formato: act_XXXXXXXXX). Retorna: id, nome, status, objetivo, budget diario e total.",
-        "jsCode": "var params;\ntry { params = JSON.parse(query); } catch(e) { return 'Erro: envie JSON com account_id'; }\nvar token = 'EAAeVLzZANk8oBQ79Ue5UimCCCYL9uNZCH9EZA7vZAJtqB5B9aQ6mO53EnUI1b8Cskpq9tRsYZAaDKvZB1kLZABjbqgwi3aenhyPnAtQkeineasNmaZA7vue9ndlaErc59UFZBaMBeDnBC8ZBpXtn9PdUP4OMQvkd53QZAL1jI9SC49WGZCvgopdZABkhGKCEuVStyYGRfYPrlhksx7HHkqZBNWo5gMLhREik5hvkp1JA7X';\nvar accountId = params.account_id;\nif (!accountId) return 'Erro: account_id e obrigatorio (formato: act_XXXXXXXXX)';\ntry {\n  var url = 'https://graph.facebook.com/v19.0/' + accountId + '/campaigns?fields=id,name,status,objective,daily_budget,lifetime_budget&limit=100&access_token=' + token;\n  var res = await fetch(url);\n  var data = await res.json();\n  if (data.error) return 'Erro Meta API: ' + data.error.message;\n  if (!data.data || data.data.length === 0) return 'Nenhuma campanha encontrada nessa conta';\n  var campaigns = data.data.map(function(c) {\n    return {\n      id: c.id,\n      nome: c.name,\n      status: c.status,\n      objetivo: c.objective,\n      budget_diario_reais: c.daily_budget ? (parseInt(c.daily_budget) / 100).toFixed(2) : null,\n      budget_total_reais: c.lifetime_budget ? (parseInt(c.lifetime_budget) / 100).toFixed(2) : null\n    };\n  });\n  return JSON.stringify(campaigns);\n} catch(e) { return 'Erro de conexao: ' + e.message; }"
+        "description": "Lista campanhas de uma conta. Envie JSON com: account_id (formato: act_XXXXXXXXX).",
+        "jsCode": "var params;\ntry { params = JSON.parse(query); } catch(e) { return 'Erro: envie JSON com account_id'; }\nvar token = 'EAAeVLzZANk8oBQ79Ue5UimCCCYL9uNZCH9EZA7vZAJtqB5B9aQ6mO53EnUI1b8Cskpq9tRsYZAaDKvZB1kLZABjbqgwi3aenhyPnAtQkeineasNmaZA7vue9ndlaErc59UFZBaMBeDnBC8ZBpXtn9PdUP4OMQvkd53QZAL1jI9SC49WGZCvgopdZABkhGKCEuVStyYGRfYPrlhksx7HHkqZBNWo5gMLhREik5hvkp1JA7X';\nvar accountId = params.account_id;\nif (!accountId) return 'Erro: account_id obrigatorio';\ntry {\n  var url = 'https://graph.facebook.com/v19.0/' + accountId + '/campaigns?fields=id,name,status,objective,daily_budget,lifetime_budget&limit=100&access_token=' + token;\n  var res = await fetch(url);\n  var data = await res.json();\n  if (data.error) return 'Erro Meta: ' + data.error.message;\n  if (!data.data || !data.data.length) return 'Nenhuma campanha encontrada';\n  return JSON.stringify(data.data.map(function(c) {\n    return { id: c.id, nome: c.name, status: c.status, objetivo: c.objective,\n      budget_diario: c.daily_budget ? (parseInt(c.daily_budget)/100).toFixed(2) : null,\n      budget_total: c.lifetime_budget ? (parseInt(c.lifetime_budget)/100).toFixed(2) : null };\n  }));\n} catch(e) { return 'Erro conexao: ' + e.message; }"
       },
       "id": "731c36fc-e0b1-44a4-a13e-fcda6b6f2a2e",
       "name": "Tool: Listar Campanhas",
@@ -280,8 +281,8 @@
     {
       "parameters": {
         "name": "listar_conjuntos",
-        "description": "Lista conjuntos de anuncios (adsets) de uma conta ou campanha. Envie JSON com: account_id (act_XXXXXXXXX) OU campaign_id (ID numerico). Retorna: id, nome, status e budget.",
-        "jsCode": "var params;\ntry { params = JSON.parse(query); } catch(e) { return 'Erro: envie JSON com account_id ou campaign_id'; }\nvar token = 'EAAeVLzZANk8oBQ79Ue5UimCCCYL9uNZCH9EZA7vZAJtqB5B9aQ6mO53EnUI1b8Cskpq9tRsYZAaDKvZB1kLZABjbqgwi3aenhyPnAtQkeineasNmaZA7vue9ndlaErc59UFZBaMBeDnBC8ZBpXtn9PdUP4OMQvkd53QZAL1jI9SC49WGZCvgopdZABkhGKCEuVStyYGRfYPrlhksx7HHkqZBNWo5gMLhREik5hvkp1JA7X';\nvar accountId = params.account_id;\nvar campaignId = params.campaign_id;\nif (!accountId && !campaignId) return 'Erro: forneca account_id ou campaign_id';\nvar baseId = campaignId || accountId;\ntry {\n  var url = 'https://graph.facebook.com/v19.0/' + baseId + '/adsets?fields=id,name,status,daily_budget,lifetime_budget,campaign_id&limit=100&access_token=' + token;\n  var res = await fetch(url);\n  var data = await res.json();\n  if (data.error) return 'Erro Meta API: ' + data.error.message;\n  if (!data.data || data.data.length === 0) return 'Nenhum conjunto de anuncios encontrado';\n  var adsets = data.data.map(function(a) {\n    return {\n      id: a.id,\n      nome: a.name,\n      status: a.status,\n      budget_diario_reais: a.daily_budget ? (parseInt(a.daily_budget) / 100).toFixed(2) : null,\n      budget_total_reais: a.lifetime_budget ? (parseInt(a.lifetime_budget) / 100).toFixed(2) : null\n    };\n  });\n  return JSON.stringify(adsets);\n} catch(e) { return 'Erro de conexao: ' + e.message; }"
+        "description": "Lista adsets de uma conta ou campanha. Envie JSON com: account_id (act_XXXXXXXXX) OU campaign_id.",
+        "jsCode": "var params;\ntry { params = JSON.parse(query); } catch(e) { return 'Erro: envie account_id ou campaign_id'; }\nvar token = 'EAAeVLzZANk8oBQ79Ue5UimCCCYL9uNZCH9EZA7vZAJtqB5B9aQ6mO53EnUI1b8Cskpq9tRsYZAaDKvZB1kLZABjbqgwi3aenhyPnAtQkeineasNmaZA7vue9ndlaErc59UFZBaMBeDnBC8ZBpXtn9PdUP4OMQvkd53QZAL1jI9SC49WGZCvgopdZABkhGKCEuVStyYGRfYPrlhksx7HHkqZBNWo5gMLhREik5hvkp1JA7X';\nvar baseId = params.campaign_id || params.account_id;\nif (!baseId) return 'Erro: forneca account_id ou campaign_id';\ntry {\n  var url = 'https://graph.facebook.com/v19.0/' + baseId + '/adsets?fields=id,name,status,daily_budget,lifetime_budget&limit=100&access_token=' + token;\n  var res = await fetch(url);\n  var data = await res.json();\n  if (data.error) return 'Erro Meta: ' + data.error.message;\n  if (!data.data || !data.data.length) return 'Nenhum adset encontrado';\n  return JSON.stringify(data.data.map(function(a) {\n    return { id: a.id, nome: a.name, status: a.status,\n      budget_diario: a.daily_budget ? (parseInt(a.daily_budget)/100).toFixed(2) : null,\n      budget_total: a.lifetime_budget ? (parseInt(a.lifetime_budget)/100).toFixed(2) : null };\n  }));\n} catch(e) { return 'Erro conexao: ' + e.message; }"
       },
       "id": "a8b12824-f38e-4296-87fe-49bd6e9f934b",
       "name": "Tool: Listar Conjuntos",
@@ -292,8 +293,8 @@
     {
       "parameters": {
         "name": "buscar_insights_multiplas_contas",
-        "description": "Busca insights de MULTIPLAS contas ao mesmo tempo. Use quando o usuario nao especificar cliente. Envie JSON com: account_ids (array de IDs ex: ['act_111','act_222']), date_preset, fields.",
-        "jsCode": "var params;\ntry { params = JSON.parse(query); } catch(e) { return 'Erro: envie JSON com account_ids (array), date_preset e fields'; }\nvar token = 'EAAeVLzZANk8oBQ79Ue5UimCCCYL9uNZCH9EZA7vZAJtqB5B9aQ6mO53EnUI1b8Cskpq9tRsYZAaDKvZB1kLZABjbqgwi3aenhyPnAtQkeineasNmaZA7vue9ndlaErc59UFZBaMBeDnBC8ZBpXtn9PdUP4OMQvkd53QZAL1jI9SC49WGZCvgopdZABkhGKCEuVStyYGRfYPrlhksx7HHkqZBNWo5gMLhREik5hvkp1JA7X';\nvar accountIds = params.account_ids || [];\nvar datePreset = params.date_preset || 'today';\nvar fields = params.fields || 'spend,impressions,clicks,actions,reach';\nif (accountIds.length === 0) return 'Erro: account_ids deve ser um array com pelo menos 1 conta';\ntry {\n  var results = [];\n  for (var i = 0; i < accountIds.length; i++) {\n    var accountId = accountIds[i];\n    var url = 'https://graph.facebook.com/v19.0/' + accountId + '/insights?date_preset=' + encodeURIComponent(datePreset) + '&fields=' + encodeURIComponent(fields) + '&access_token=' + token;\n    var res = await fetch(url);\n    var data = await res.json();\n    if (!data.error && data.data && data.data.length > 0) {\n      results.push({ account_id: accountId, data: data.data[0] });\n    } else if (data.error) {\n      results.push({ account_id: accountId, error: data.error.message });\n    } else {\n      results.push({ account_id: accountId, data: null, note: 'sem dados no periodo' });\n    }\n  }\n  return JSON.stringify(results);\n} catch(e) { return 'Erro de conexao: ' + e.message; }"
+        "description": "Busca insights de multiplas contas. Envie JSON com: account_ids (array), date_preset, fields.",
+        "jsCode": "var params;\ntry { params = JSON.parse(query); } catch(e) { return 'Erro: JSON invalido'; }\nvar token = 'EAAeVLzZANk8oBQ79Ue5UimCCCYL9uNZCH9EZA7vZAJtqB5B9aQ6mO53EnUI1b8Cskpq9tRsYZAaDKvZB1kLZABjbqgwi3aenhyPnAtQkeineasNmaZA7vue9ndlaErc59UFZBaMBeDnBC8ZBpXtn9PdUP4OMQvkd53QZAL1jI9SC49WGZCvgopdZABkhGKCEuVStyYGRfYPrlhksx7HHkqZBNWo5gMLhREik5hvkp1JA7X';\nvar accountIds = params.account_ids || [];\nvar datePreset = params.date_preset || 'today';\nvar fields = params.fields || 'spend,impressions,clicks,actions,reach';\nif (!accountIds.length) return 'Erro: account_ids vazio';\ntry {\n  var results = [];\n  for (var i = 0; i < accountIds.length; i++) {\n    var url = 'https://graph.facebook.com/v19.0/' + accountIds[i] + '/insights?date_preset=' + encodeURIComponent(datePreset) + '&fields=' + encodeURIComponent(fields) + '&access_token=' + token;\n    var res = await fetch(url);\n    var data = await res.json();\n    if (data.error) results.push({ account_id: accountIds[i], error: data.error.message });\n    else if (data.data && data.data.length) results.push({ account_id: accountIds[i], data: data.data[0] });\n    else results.push({ account_id: accountIds[i], data: null });\n  }\n  return JSON.stringify(results);\n} catch(e) { return 'Erro conexao: ' + e.message; }"
       },
       "id": "81aa87da-6607-4ffc-95b9-1be17e23ec68",
       "name": "Tool: Insights Multiplas Contas",
@@ -345,176 +346,52 @@
   "pinData": {},
   "connections": {
     "Webhook Evolution API": {
-      "main": [
-        [
-          {
-            "node": "Parse Message",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Parse Message", "type": "main", "index": 0 }]]
     },
     "Parse Message": {
-      "main": [
-        [
-          {
-            "node": "Menciona Alicia?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Menciona Alicia?", "type": "main", "index": 0 }]]
     },
     "Menciona Alicia?": {
-      "main": [
-        [
-          {
-            "node": "Calcular Datas",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Calcular Datas", "type": "main", "index": 0 }]]
     },
     "Calcular Datas": {
-      "main": [
-        [
-          {
-            "node": "E Relatorio Semanal?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "E Relatorio Semanal?", "type": "main", "index": 0 }]]
     },
     "E Relatorio Semanal?": {
       "main": [
-        [
-          {
-            "node": "Buscar Insights 7 Dias",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Buscar Contas Meta",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Buscar Insights 7 Dias", "type": "main", "index": 0 }],
+        [{ "node": "Buscar Contas Meta", "type": "main", "index": 0 }]
       ]
     },
     "Buscar Insights 7 Dias": {
-      "main": [
-        [
-          {
-            "node": "Formatar Relatorio",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Formatar Relatorio", "type": "main", "index": 0 }]]
     },
     "Formatar Relatorio": {
-      "main": [
-        [
-          {
-            "node": "Enviar Relatorio WhatsApp",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Enviar Relatorio WhatsApp", "type": "main", "index": 0 }]]
     },
     "Buscar Contas Meta": {
-      "main": [
-        [
-          {
-            "node": "Montar Contexto",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Montar Contexto", "type": "main", "index": 0 }]]
     },
     "Montar Contexto": {
-      "main": [
-        [
-          {
-            "node": "Alicia Agent",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Alicia Agent", "type": "main", "index": 0 }]]
     },
     "Alicia Agent": {
-      "main": [
-        [
-          {
-            "node": "Enviar Resposta WhatsApp",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Enviar Resposta WhatsApp", "type": "main", "index": 0 }]]
     },
     "Claude Opus": {
-      "ai_languageModel": [
-        [
-          {
-            "node": "Alicia Agent",
-            "type": "ai_languageModel",
-            "index": 0
-          }
-        ]
-      ]
+      "ai_languageModel": [[{ "node": "Alicia Agent", "type": "ai_languageModel", "index": 0 }]]
     },
     "Tool: Buscar Insights": {
-      "ai_tool": [
-        [
-          {
-            "node": "Alicia Agent",
-            "type": "ai_tool",
-            "index": 0
-          }
-        ]
-      ]
+      "ai_tool": [[{ "node": "Alicia Agent", "type": "ai_tool", "index": 0 }]]
     },
     "Tool: Listar Campanhas": {
-      "ai_tool": [
-        [
-          {
-            "node": "Alicia Agent",
-            "type": "ai_tool",
-            "index": 0
-          }
-        ]
-      ]
+      "ai_tool": [[{ "node": "Alicia Agent", "type": "ai_tool", "index": 0 }]]
     },
     "Tool: Listar Conjuntos": {
-      "ai_tool": [
-        [
-          {
-            "node": "Alicia Agent",
-            "type": "ai_tool",
-            "index": 0
-          }
-        ]
-      ]
+      "ai_tool": [[{ "node": "Alicia Agent", "type": "ai_tool", "index": 0 }]]
     },
     "Tool: Insights Multiplas Contas": {
-      "ai_tool": [
-        [
-          {
-            "node": "Alicia Agent",
-            "type": "ai_tool",
-            "index": 0
-          }
-        ]
-      ]
+      "ai_tool": [[{ "node": "Alicia Agent", "type": "ai_tool", "index": 0 }]]
     }
   },
   "active": true,
