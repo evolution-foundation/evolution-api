@@ -2064,7 +2064,8 @@ export class BaileysStartupService extends ChannelStartupService {
     try {
       const lid = await this.client.signalRepository.lidMapping.getLIDForPN(jid);
       return { wuid: jid, lid: lid || null };
-    } catch {
+    } catch (error) {
+      console.error(`Failed to fetch LID for ${jid}:`, error);
       return { wuid: jid, lid: null };
     }
   }
