@@ -131,9 +131,10 @@ export class BusinessStartupService extends ChannelStartupService {
     try {
       this.loadChatwoot();
 
-      this.eventHandler(content);
+      const senderJid = createJid(content.messages ? content.messages[0].from : content.statuses[0]?.recipient_id);
+      this.phoneNumber = senderJid;
 
-      this.phoneNumber = createJid(content.messages ? content.messages[0].from : content.statuses[0]?.recipient_id);
+      await this.eventHandler(content, senderJid);
     } catch (error) {
       this.logger.error(error);
       throw new InternalServerErrorException(error?.toString());
@@ -382,7 +383,7 @@ export class BusinessStartupService extends ChannelStartupService {
     return messageType;
   }
 
-  protected async messageHandle(received: any, database: Database, settings: any) {
+  protected async messageHandle(received: any, database: Database, settings: any, senderJid: string) {
     try {
       let messageRaw: any;
       let pushName: any;
@@ -390,11 +391,11 @@ export class BusinessStartupService extends ChannelStartupService {
       if (received.contacts) pushName = received.contacts[0].profile.name;
 
       if (received.messages) {
-        const message = received.messages[0]; // Añadir esta línea para definir message
+        const message = received.messages[0];
 
         const key = {
           id: message.id,
-          remoteJid: this.phoneNumber,
+          remoteJid: senderJid,
           fromMe: message.from === received.metadata.phone_number_id,
         };
 
@@ -747,8 +748,8 @@ export class BusinessStartupService extends ChannelStartupService {
         for await (const item of received.statuses) {
           const key = {
             id: item.id,
-            remoteJid: this.phoneNumber,
-            fromMe: this.phoneNumber === received.metadata.phone_number_id,
+            remoteJid: senderJid,
+            fromMe: senderJid === received.metadata.phone_number_id,
           };
           if (settings?.groups_ignore && key.remoteJid.includes('@g.us')) {
             return;
@@ -893,21 +894,18 @@ export class BusinessStartupService extends ChannelStartupService {
     return message;
   }
 
-  protected async eventHandler(content: any) {
+  protected async eventHandler(content: any, senderJid: string) {
     try {
-      // Registro para depuración
       this.logger.log('Contenido recibido en eventHandler:');
       this.logger.log(JSON.stringify(content, null, 2));
 
       const database = this.configService.get<Database>('DATABASE');
       const settings = await this.findSettings();
 
-      // Si hay mensajes, verificar primero el tipo
       if (content.messages && content.messages.length > 0) {
         const message = content.messages[0];
         this.logger.log(`Tipo de mensaje recibido: ${message.type}`);
 
-        // Verificamos el tipo de mensaje antes de procesarlo
         if (
           message.type === 'text' ||
           message.type === 'image' ||
@@ -921,14 +919,12 @@ export class BusinessStartupService extends ChannelStartupService {
           message.type === 'button' ||
           message.type === 'reaction'
         ) {
-          // Procesar el mensaje normalmente
-          this.messageHandle(content, database, settings);
+          await this.messageHandle(content, database, settings, senderJid);
         } else {
           this.logger.warn(`Tipo de mensaje no reconocido: ${message.type}`);
         }
       } else if (content.statuses) {
-        // Procesar actualizaciones de estado
-        this.messageHandle(content, database, settings);
+        await this.messageHandle(content, database, settings, senderJid);
       } else {
         this.logger.warn('No se encontraron mensajes ni estados en el contenido recibido');
       }
