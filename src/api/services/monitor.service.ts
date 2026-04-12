@@ -393,20 +393,29 @@ export class WAMonitoringService {
     this.eventEmitter.on('remove.instance', async (instanceName: string) => {
       try {
         await this.waInstances[instanceName]?.sendDataWebhook(Events.REMOVE_INSTANCE, null);
+      } catch (error) {
+        this.logger.warn(
+          `sendDataWebhook REMOVE_INSTANCE failed for "${instanceName}": ${error?.message ?? String(error)}`,
+        );
+      }
 
-        this.clearDelInstanceTime(instanceName);
+      this.clearDelInstanceTime(instanceName);
 
-        this.cleaningUp(instanceName);
-        this.cleaningStoreData(instanceName);
-      } finally {
-        this.logger.warn(`Instance "${instanceName}" - REMOVED`);
+      try {
+        await this.cleaningUp(instanceName);
+      } catch (error) {
+        this.logger.warn(`cleaningUp failed for "${instanceName}": ${error?.message ?? String(error)}`);
       }
 
       try {
-        delete this.waInstances[instanceName];
+        await this.cleaningStoreData(instanceName);
       } catch (error) {
-        this.logger.error(error);
+        this.logger.warn(`cleaningStoreData failed for "${instanceName}": ${error?.message ?? String(error)}`);
       }
+
+      delete this.waInstances[instanceName];
+
+      this.logger.warn(`Instance "${instanceName}" - REMOVED`);
     });
     this.eventEmitter.on('logout.instance', async (instanceName: string) => {
       try {
