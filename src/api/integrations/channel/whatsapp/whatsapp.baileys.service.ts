@@ -88,8 +88,8 @@ import { sendTelemetry } from '@utils/sendTelemetry';
 import useMultiFileAuthStatePrisma from '@utils/use-multi-file-auth-state-prisma';
 import { AuthStateProvider } from '@utils/use-multi-file-auth-state-provider-files';
 import { useMultiFileAuthStateRedisDb } from '@utils/use-multi-file-auth-state-redis-db';
-import axios from 'axios';
 import audioDecode from 'audio-decode';
+import axios from 'axios';
 import makeWASocket, {
   AnyMessageContent,
   BufferedEventData,
@@ -442,7 +442,7 @@ export class BaileysStartupService extends ChannelStartupService {
       qrcodeTerminal.generate(qr, { small: true }, (qrcode) =>
         this.logger.log(
           `\n{ instance: ${this.instance.name} pairingCode: ${this.instance.qrcode.pairingCode}, qrcodeCount: ${this.instance.qrcode.count} }\n` +
-          qrcode,
+            qrcode,
         ),
       );
 
@@ -468,16 +468,16 @@ export class BaileysStartupService extends ChannelStartupService {
 
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406];
-      
+
       // FIX: Do not reconnect if it's the initial connection (waiting for QR code)
       // This prevents infinite loop that blocks QR code generation
       const isInitialConnection = !this.instance.wuid && (this.instance.qrcode?.count ?? 0) === 0;
-      
+
       if (isInitialConnection) {
         this.logger.info('Initial connection closed, waiting for QR code generation...');
         return;
       }
-      
+
       const shouldReconnect = !codesToNotReconnect.includes(statusCode);
 
       this.logger.info({
@@ -494,9 +494,7 @@ export class BaileysStartupService extends ChannelStartupService {
           await this.connectToWhatsapp(this.phoneNumber);
         }, 3000);
       } else {
-        this.logger.info(
-          `Skipping reconnection for status code ${statusCode} (code is in codesToNotReconnect list)`,
-        );
+        this.logger.info(`Skipping reconnection for status code ${statusCode} (code is in codesToNotReconnect list)`);
         this.sendDataWebhook(Events.STATUS_INSTANCE, {
           instance: this.instance.name,
           status: 'closed',
@@ -1019,13 +1017,15 @@ export class BaileysStartupService extends ChannelStartupService {
       syncType?: proto.HistorySync.HistorySyncType;
     }) => {
       try {
-        // Reset counters when a new sync starts (progress resets or decreases)
-        if (progress <= this.historySyncLastProgress) {
+        const normalizedProgress = progress ?? -1;
+
+        if (normalizedProgress <= this.historySyncLastProgress) {
           this.historySyncMessageCount = 0;
           this.historySyncChatCount = 0;
           this.historySyncContactCount = 0;
         }
-        this.historySyncLastProgress = progress ?? -1;
+
+        this.historySyncLastProgress = normalizedProgress;
 
         if (syncType === proto.HistorySync.HistorySyncType.ON_DEMAND) {
           console.log('received on-demand history sync, messages=', messages);
@@ -1129,16 +1129,16 @@ export class BaileysStartupService extends ChannelStartupService {
 
         const messagesRepository: Set<string> = new Set(
           chatwootImport.getRepositoryMessagesCache(instance) ??
-          (
-            await this.prismaRepository.message.findMany({
-              select: { key: true },
-              where: { instanceId: this.instanceId },
-            })
-          ).map((message) => {
-            const key = message.key as { id: string };
+            (
+              await this.prismaRepository.message.findMany({
+                select: { key: true },
+                where: { instanceId: this.instanceId },
+              })
+            ).map((message) => {
+              const key = message.key as { id: string };
 
-            return key.id;
-          }),
+              return key.id;
+            }),
         );
 
         if (chatwootImport.getRepositoryMessagesCache(instance) === null) {
@@ -1202,11 +1202,7 @@ export class BaileysStartupService extends ChannelStartupService {
         const filteredContacts = contacts.filter((c) => !!c.notify || !!c.name);
         this.historySyncContactCount += filteredContacts.length;
 
-        await this.contactHandle['contacts.upsert'](
-          filteredContacts.map((c) => ({ id: c.id, name: c.name ?? c.notify })),
-        );
-
-        if (progress === 100) {
+        if (normalizedProgress === 100) {
           this.sendDataWebhook(Events.MESSAGING_HISTORY_SET, {
             messageCount: this.historySyncMessageCount,
             chatCount: this.historySyncChatCount,
@@ -1218,6 +1214,10 @@ export class BaileysStartupService extends ChannelStartupService {
           this.historySyncContactCount = 0;
           this.historySyncLastProgress = -1;
         }
+
+        await this.contactHandle['contacts.upsert'](
+          filteredContacts.map((c) => ({ id: c.id, name: c.name ?? c.notify })),
+        );
 
         contacts = undefined;
         messages = undefined;
@@ -1826,7 +1826,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
             if (!findMessage?.id) {
               this.logger.verbose(
-                `Original message not found for update after ${maxRetries} retries. Skipping. This is expected for protocol messages or ephemeral events not saved to the database. Key: ${JSON.stringify(key)}`,
+                `Original message not found for update. Skipping. This is expected for protocol messages or ephemeral events not saved to the database. Key: ${JSON.stringify(key)}`,
               );
               continue;
             }
@@ -2337,12 +2337,12 @@ export class BaileysStartupService extends ChannelStartupService {
       const url = match[0].replace(/[.,);\]]+$/u, '');
       if (!url) return undefined;
 
-      const previewData = await getLinkPreview(url, {
+      const previewData = (await getLinkPreview(url, {
         imagesPropertyType: 'og', // fetches only open-graph images
         headers: {
           'user-agent': 'googlebot', // fetches with googlebot to prevent login pages
         },
-      }) as any;
+      })) as any;
 
       if (!previewData || !previewData.title) return undefined;
 
@@ -2356,9 +2356,9 @@ export class BaileysStartupService extends ChannelStartupService {
           thumbnailUrl: image,
           sourceUrl: url,
           mediaUrl: url,
-          renderLargerThumbnail: true
+          renderLargerThumbnail: true,
           // showAdAttribution: true // Removed to prevent "Sent via ad" label
-        }
+        },
       };
     } catch (error) {
       this.logger.error(`Error generating link preview: ${error}`);
