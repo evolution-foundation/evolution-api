@@ -127,17 +127,36 @@ export class BusinessStartupService extends ChannelStartupService {
     if (!data) return;
 
     const content = data.entry[0].changes[0].value;
+    const firstMessage =
+      content?.messages?.[0] ?? content?.message_echoes?.[0] ?? content?.smb_message_echoes?.[0] ?? undefined;
+    const recipient = content?.statuses?.[0]?.recipient_id;
+    const remoteId = firstMessage?.to ?? firstMessage?.from ?? recipient;
 
     try {
       this.loadChatwoot();
 
-      this.eventHandler(content);
+      this.eventHandler(this.normalizeWebhookContent(content));
 
-      this.phoneNumber = createJid(content.messages ? content.messages[0].from : content.statuses[0]?.recipient_id);
+      if (remoteId) {
+        this.phoneNumber = createJid(remoteId);
+      }
     } catch (error) {
       this.logger.error(error);
       throw new InternalServerErrorException(error?.toString());
     }
+  }
+
+  private normalizeWebhookContent(content: any) {
+    if (!content || typeof content !== 'object') return content;
+
+    const normalized = { ...content };
+    const echoes = normalized?.message_echoes ?? normalized?.smb_message_echoes;
+
+    if (!Array.isArray(normalized.messages) && Array.isArray(echoes) && echoes.length > 0) {
+      normalized.messages = echoes;
+    }
+
+    return normalized;
   }
 
   private async downloadMediaMessage(message: any) {
@@ -386,15 +405,19 @@ export class BusinessStartupService extends ChannelStartupService {
     try {
       let messageRaw: any;
       let pushName: any;
+      const incomingContact = received?.contacts?.[0];
 
-      if (received.contacts) pushName = received.contacts[0].profile.name;
+      if (incomingContact) {
+        pushName = incomingContact?.profile?.name ?? incomingContact?.name ?? incomingContact?.wa_id ?? undefined;
+      }
 
       if (received.messages) {
         const message = received.messages[0]; // Añadir esta línea para definir message
+        const remoteJid = createJid(message?.to ?? message?.from);
 
         const key = {
           id: message.id,
-          remoteJid: this.phoneNumber,
+          remoteJid,
           fromMe: message.from === received.metadata.phone_number_id,
         };
 
@@ -701,8 +724,11 @@ export class BusinessStartupService extends ChannelStartupService {
           where: { instanceId: this.instanceId, remoteJid: key.remoteJid },
         });
 
+        const contactPhone = incomingContact?.profile?.phone ?? incomingContact?.wa_id ?? message?.to ?? message?.from;
+        if (!contactPhone) return;
+
         const contactRaw: any = {
-          remoteJid: received.contacts[0].profile.phone,
+          remoteJid: createJid(contactPhone),
           pushName,
           // profilePicUrl: '',
           instanceId: this.instanceId,
@@ -714,7 +740,7 @@ export class BusinessStartupService extends ChannelStartupService {
 
         if (contact) {
           const contactRaw: any = {
-            remoteJid: received.contacts[0].profile.phone,
+            remoteJid: createJid(contactPhone),
             pushName,
             // profilePicUrl: '',
             instanceId: this.instanceId,
@@ -745,10 +771,11 @@ export class BusinessStartupService extends ChannelStartupService {
       }
       if (received.statuses) {
         for await (const item of received.statuses) {
+          const remoteJid = createJid(item?.recipient_id ?? this.phoneNumber);
           const key = {
             id: item.id,
-            remoteJid: this.phoneNumber,
-            fromMe: this.phoneNumber === received.metadata.phone_number_id,
+            remoteJid,
+            fromMe: item?.recipient_id ? item.recipient_id !== received.metadata.phone_number_id : true,
           };
           if (settings?.groups_ignore && key.remoteJid.includes('@g.us')) {
             return;
