@@ -434,6 +434,13 @@ export class BusinessStartupService extends ChannelStartupService {
       if (received.messages) {
         const message = received.messages[0]; // Añadir esta línea para definir message
         const remoteJid = createJid(message?.to ?? message?.from);
+        const contact = await this.prismaRepository.contact.findFirst({
+          where: { instanceId: this.instanceId, remoteJid },
+        });
+
+        if (!pushName) {
+          pushName = contact?.pushName ?? incomingContact?.user_id ?? incomingContact?.wa_id ?? undefined;
+        }
 
         const key = {
           id: message.id,
@@ -739,10 +746,6 @@ export class BusinessStartupService extends ChannelStartupService {
             data: messageRaw,
           });
         }
-
-        const contact = await this.prismaRepository.contact.findFirst({
-          where: { instanceId: this.instanceId, remoteJid: key.remoteJid },
-        });
 
         const contactPhone = incomingContact?.profile?.phone ?? incomingContact?.wa_id ?? message?.to ?? message?.from;
         if (!contactPhone) return;
