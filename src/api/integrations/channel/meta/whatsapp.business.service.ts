@@ -159,6 +159,26 @@ export class BusinessStartupService extends ChannelStartupService {
     return normalized;
   }
 
+  private normalizePhoneNumber(value?: string) {
+    return typeof value === 'string' ? value.replace(/\D/g, '') : '';
+  }
+
+  private isCloudApiEchoPayload(received: any) {
+    return Array.isArray(received?.message_echoes) || Array.isArray(received?.smb_message_echoes);
+  }
+
+  private isCloudApiFromMe(message: any, received: any) {
+    if (this.isCloudApiEchoPayload(received)) return true;
+
+    const from = this.normalizePhoneNumber(message?.from);
+    const displayPhone = this.normalizePhoneNumber(received?.metadata?.display_phone_number);
+    const phoneNumberId = this.normalizePhoneNumber(received?.metadata?.phone_number_id);
+
+    if (!from) return false;
+
+    return from === displayPhone || from === phoneNumberId;
+  }
+
   private async downloadMediaMessage(message: any) {
     try {
       const id = message[message.type].id;
@@ -418,7 +438,7 @@ export class BusinessStartupService extends ChannelStartupService {
         const key = {
           id: message.id,
           remoteJid,
-          fromMe: message.from === received.metadata.phone_number_id,
+          fromMe: this.isCloudApiFromMe(message, received),
         };
 
         if (message.type === 'sticker') {
