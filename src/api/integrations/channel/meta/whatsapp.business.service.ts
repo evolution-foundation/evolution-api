@@ -127,15 +127,13 @@ export class BusinessStartupService extends ChannelStartupService {
     if (!data) return;
 
     const content = data.entry[0].changes[0].value;
-    const firstMessage =
-      content?.messages?.[0] ?? content?.message_echoes?.[0] ?? content?.smb_message_echoes?.[0] ?? undefined;
-    const recipient = content?.statuses?.[0]?.recipient_id;
-    const remoteId = firstMessage?.to ?? firstMessage?.from ?? recipient;
+    const normalizedContent = this.normalizeWebhookContent(content);
+    const remoteId = this.resolveRemoteId(normalizedContent);
 
     try {
       this.loadChatwoot();
 
-      this.eventHandler(this.normalizeWebhookContent(content));
+      this.eventHandler(normalizedContent);
 
       if (remoteId) {
         this.phoneNumber = createJid(remoteId);
@@ -150,7 +148,9 @@ export class BusinessStartupService extends ChannelStartupService {
     if (!content || typeof content !== 'object') return content;
 
     const normalized = { ...content };
-    const echoes = normalized?.message_echoes ?? normalized?.smb_message_echoes;
+    const messageEchoes = Array.isArray(normalized?.message_echoes) ? normalized.message_echoes : undefined;
+    const smbMessageEchoes = Array.isArray(normalized?.smb_message_echoes) ? normalized.smb_message_echoes : undefined;
+    const echoes = messageEchoes?.length ? messageEchoes : smbMessageEchoes?.length ? smbMessageEchoes : undefined;
 
     if (!Array.isArray(normalized.messages) && Array.isArray(echoes) && echoes.length > 0) {
       normalized.messages = echoes;
@@ -161,6 +161,26 @@ export class BusinessStartupService extends ChannelStartupService {
 
   private normalizePhoneNumber(value?: string) {
     return typeof value === 'string' ? value.replace(/\D/g, '') : '';
+  }
+
+  private resolveRemoteId(content: any) {
+    const firstMessage = content?.messages?.[0];
+    const recipient = content?.statuses?.[0]?.recipient_id;
+
+    const candidates = [firstMessage?.from, firstMessage?.to, recipient].filter(Boolean) as string[];
+    if (candidates.length === 0) return undefined;
+
+    const businessNumbers = [
+      this.normalizePhoneNumber(content?.metadata?.display_phone_number),
+      this.normalizePhoneNumber(content?.metadata?.phone_number_id),
+    ].filter(Boolean);
+
+    const externalCounterpart = candidates.find((candidate) => {
+      const normalizedCandidate = this.normalizePhoneNumber(candidate);
+      return normalizedCandidate && !businessNumbers.includes(normalizedCandidate);
+    });
+
+    return externalCounterpart ?? candidates[0];
   }
 
   private isCloudApiEchoPayload(received: any) {
@@ -177,6 +197,16 @@ export class BusinessStartupService extends ChannelStartupService {
     if (!from) return false;
 
     return from === displayPhone || from === phoneNumberId;
+  }
+
+  private isCloudApiStatusFromMe(item: any, received: any) {
+    const recipient = this.normalizePhoneNumber(item?.recipient_id);
+    if (!recipient) return true;
+
+    const displayPhone = this.normalizePhoneNumber(received?.metadata?.display_phone_number);
+    const phoneNumberId = this.normalizePhoneNumber(received?.metadata?.phone_number_id);
+
+    return recipient !== displayPhone && recipient !== phoneNumberId;
   }
 
   private async downloadMediaMessage(message: any) {
@@ -794,11 +824,13 @@ export class BusinessStartupService extends ChannelStartupService {
       }
       if (received.statuses) {
         for await (const item of received.statuses) {
-          const remoteJid = createJid(item?.recipient_id ?? this.phoneNumber);
-          const key = {
+          const remoteId = item?.recipient_id ?? this.phoneNumber;
+          if (!remoteId) continue;
+
+          const key: any = {
             id: item.id,
-            remoteJid,
-            fromMe: item?.recipient_id ? item.recipient_id !== received.metadata.phone_number_id : true,
+            remoteJid: createJid(remoteId),
+            fromMe: this.isCloudApiStatusFromMe(item, received),
           };
           if (settings?.groups_ignore && key.remoteJid.includes('@g.us')) {
             return;
@@ -816,6 +848,14 @@ export class BusinessStartupService extends ChannelStartupService {
 
             if (!findMessage) {
               return;
+            }
+
+            const findMessageKey: any = findMessage?.key ?? {};
+            if (findMessageKey?.remoteJid) {
+              key.remoteJid = findMessageKey.remoteJid;
+            }
+            if (typeof findMessageKey?.fromMe === 'boolean') {
+              key.fromMe = findMessageKey.fromMe;
             }
 
             if (item.message === null && item.status === undefined) {
