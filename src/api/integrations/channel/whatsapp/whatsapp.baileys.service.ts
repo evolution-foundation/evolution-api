@@ -3562,7 +3562,7 @@ export class BaileysStartupService extends ChannelStartupService {
         const result = this.sendMessageWithTyping<AnyMessageContent>(
           data.number,
           messageContent as any,
-          { presence: 'recording', delay: data?.delay },
+          { presence: 'recording', delay: data?.delay, quoted: data?.quoted },
           isIntegration,
         );
 
@@ -3588,7 +3588,7 @@ export class BaileysStartupService extends ChannelStartupService {
         mimetype: 'audio/ogg; codecs=opus',
         ...(metadata && { seconds: metadata.seconds, waveform: metadata.waveform }),
       },
-      { presence: 'recording', delay: data?.delay },
+      { presence: 'recording', delay: data?.delay, quoted: data?.quoted },
       isIntegration,
     );
   }
