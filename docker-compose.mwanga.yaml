@@ -1,0 +1,38 @@
+services:
+  api:
+    container_name: evolution_api
+    image: evoapicloud/evolution-api:latest
+    restart: always
+    depends_on:
+      - redis
+      - evolution_postgres
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    networks:
+      - evolution-net
+
+  redis:
+    container_name: evolution_redis
+    image: redis:latest
+    restart: always
+    networks:
+      - evolution-net
+
+  evolution_postgres:
+    container_name: evolution_postgres
+    image: postgres:15
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_DB=evolution_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres_pass
+    networks:
+      - evolution-net
+
+networks:
+  evolution-net:
+    driver: bridge
