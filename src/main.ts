@@ -16,11 +16,11 @@ import {
   Sentry as SentryConfig,
   Webhook,
 } from '@config/env.config';
-import { gateMiddleware, initializeRuntime, shutdown, startHeartbeat } from '@licensing/runtime';
-import { setDB } from '@licensing/store';
 import { onUnexpectedError } from '@config/error.config';
 import { Logger } from '@config/logger.config';
 import { ROOT_DIR } from '@config/path.config';
+import { gateMiddleware, initializeRuntime, shutdown, startHeartbeat } from '@licensing/runtime';
+import { setDB } from '@licensing/store';
 import * as Sentry from '@sentry/node';
 import { ServerUP } from '@utils/server-up';
 import axios from 'axios';

@@ -10,7 +10,29 @@ export function resolveEndpoint(): string {
     return decodeXOR(encodedEP, xorKey);
   }
   // Dev fallback — assembled at runtime, not a single string literal.
-  const parts = ['h', 'tt', 'ps', '://', 'li', 'ce', 'nse', '.', 'ev', 'ol', 'ut', 'io', 'nf', 'ou', 'nd', 'at', 'io', 'n.', 'co', 'm.', 'br'];
+  const parts = [
+    'h',
+    'tt',
+    'ps',
+    '://',
+    'li',
+    'ce',
+    'nse',
+    '.',
+    'ev',
+    'ol',
+    'ut',
+    'io',
+    'nf',
+    'ou',
+    'nd',
+    'at',
+    'io',
+    'n.',
+    'co',
+    'm.',
+    'br',
+  ];
   return parts.join('');
 }
 

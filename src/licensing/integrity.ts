@@ -24,5 +24,8 @@ export function computeSessionSeed(instanceName: string, rc: RuntimeContext): Bu
 
 export function deriveInstanceToken(instanceID: string, rc: RuntimeContext): string {
   if (!rc || !rc.isActive()) return '';
-  return createHash('sha256').update(instanceID + rc.apiKey).digest('hex').slice(0, 16);
+  return createHash('sha256')
+    .update(instanceID + rc.apiKey)
+    .digest('hex')
+    .slice(0, 16);
 }

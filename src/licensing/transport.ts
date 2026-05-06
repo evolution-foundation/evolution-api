@@ -28,10 +28,7 @@ export async function postSigned<T = unknown>(
   });
 }
 
-export async function postUnsigned<T = unknown>(
-  path: string,
-  payload: unknown,
-): Promise<AxiosResponse<T>> {
+export async function postUnsigned<T = unknown>(path: string, payload: unknown): Promise<AxiosResponse<T>> {
   return httpClient.post<T>(resolveEndpoint() + path, payload, {
     headers: { 'Content-Type': 'application/json' },
   });

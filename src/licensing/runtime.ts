@@ -20,6 +20,7 @@ import { postSigned, postUnsigned, readErrorMessage } from './transport';
 const logger = new Logger('Licensing');
 
 const HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes — same as Go.
+const DOCS_URL = 'https://docs.evolutionfoundation.com.br/licensing';
 
 interface InitializeOptions {
   tier?: string;
@@ -44,7 +45,11 @@ export class RuntimeContext {
   private msgSent = 0;
   private msgRecv = 0;
 
-  constructor(public readonly globalApiKey: string, tier: string, version: string) {
+  constructor(
+    public readonly globalApiKey: string,
+    tier: string,
+    version: string,
+  ) {
     this.tier = tier;
     this.version = version;
   }
@@ -62,7 +67,9 @@ export class RuntimeContext {
   }
 
   recomputeContextHash(): void {
-    this.ctxHash = createHash('sha256').update(this.apiKey + this.instanceId).digest();
+    this.ctxHash = createHash('sha256')
+      .update(this.apiKey + this.instanceId)
+      .digest();
   }
 
   trackMessageSent(): void {
@@ -184,8 +191,6 @@ export async function initializeRuntime(opts: InitializeOptions = {}): Promise<R
   return rc;
 }
 
-const DOCS_URL = 'https://docs.evolutionfoundation.com.br/licensing';
-
 function printRegistrationBanner(rc?: RuntimeContext): void {
   logger.warn('╔══════════════════════════════════════════════════════════╗');
   logger.warn('║              License Registration Required               ║');
@@ -213,7 +218,9 @@ export function validateContext(rc: RuntimeContext | null): [boolean, string] {
   if (!rc) return [false, ''];
   if (!rc.isActive()) return [false, rc.registerUrl];
   // Verify hash integrity.
-  const expected = createHash('sha256').update(rc.apiKey + rc.instanceId).digest();
+  const expected = createHash('sha256')
+    .update(rc.apiKey + rc.instanceId)
+    .digest();
   const actual = rc.contextHash();
   if (!expected.equals(actual)) return [false, ''];
   return [true, ''];
