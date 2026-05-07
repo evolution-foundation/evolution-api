@@ -517,8 +517,7 @@ export class BaileysStartupService extends ChannelStartupService {
       // If a stream:error 515 (Baileys' "restart needed" handshake) just fired,
       // a follow-up loggedOut is the expected restart signal — not an actual
       // logout — so reconnect anyway.
-      const recentStream515 =
-        Date.now() - this._lastStream515At < BaileysStartupService.STREAM_515_RECONNECT_GRACE_MS;
+      const recentStream515 = Date.now() - this._lastStream515At < BaileysStartupService.STREAM_515_RECONNECT_GRACE_MS;
       const shouldReconnect =
         !codesToNotReconnect.includes(statusCode) || (statusCode === DisconnectReason.loggedOut && recentStream515);
 
