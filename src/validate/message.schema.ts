@@ -102,6 +102,15 @@ export const mediaMessageSchema: JSONSchema7 = {
     media: { type: 'string' },
     fileName: { type: 'string' },
     caption: { type: 'string' },
+    gifPlayback: {
+      oneOf: [{ type: 'boolean' }, { type: 'string', enum: ['true', 'false'] }],
+    },
+    gifAttribution: {
+      oneOf: [
+        { type: 'integer', enum: [0, 1, 2] },
+        { type: 'string', enum: ['0', '1', '2'] },
+      ],
+    },
     delay: {
       type: 'integer',
       description: 'Enter a value in milliseconds',
