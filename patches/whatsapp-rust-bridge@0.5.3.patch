@@ -1,0 +1,19 @@
+diff --git a/package.json b/package.json
+index ff66daf7d92b8037b8e6b4cce32c01d46bd454d2..90bc82fa358d398f0a0b135b94421bd28d0214f8 100644
+--- a/package.json
++++ b/package.json
+@@ -13,10 +13,13 @@
+         "dist/**/*",
+         "pkg/whatsapp_rust_bridge.d.ts"
+     ],
++    "main": "./dist/index.js",
+     "exports": {
+         ".": {
++            "types": "./dist/index.d.ts",
+             "import": "./dist/index.js",
+-            "types": "./dist/index.d.ts"
++            "require": "./dist/index.js",
++            "default": "./dist/index.js"
+         }
+     },
+     "scripts": {
