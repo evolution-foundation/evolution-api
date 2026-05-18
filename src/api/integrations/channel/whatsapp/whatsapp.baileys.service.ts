@@ -86,6 +86,7 @@ import { Instance, Message } from '@prisma/client';
 import { createJid } from '@utils/createJid';
 import { fetchLatestWaWebVersion } from '@utils/fetchLatestWaWebVersion';
 import { makeProxyAgent, makeProxyAgentUndici } from '@utils/makeProxyAgent';
+import { normalizeFileName, resolveMentionsEveryOne } from '@utils/normalizeSendMessageOptions';
 import { getOnWhatsappCache, saveOnWhatsappCache } from '@utils/onWhatsappCache';
 import { status } from '@utils/renderStatus';
 import { sendTelemetry } from '@utils/sendTelemetry';
@@ -2643,7 +2644,7 @@ export class BaileysStartupService extends ChannelStartupService {
           throw new NotFoundException('Group not found');
         }
 
-        if (options?.mentionsEveryOne === true) {
+        if (resolveMentionsEveryOne(options)) {
           mentions = group.participants.map((participant) => participant.id);
         } else if (options?.mentioned?.length) {
           mentions = options.mentioned.map((mention) => {
@@ -3265,7 +3266,7 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   public async mediaMessage(data: SendMediaDto, file?: any, isIntegration = false) {
-    const mediaData: SendMediaDto = { ...data };
+    const mediaData: SendMediaDto = normalizeFileName({ ...data });
 
     if (file) mediaData.media = file.buffer.toString('base64');
 

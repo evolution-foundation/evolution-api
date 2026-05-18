@@ -12,6 +12,8 @@ export class Options {
   linkPreview?: boolean;
   encoding?: boolean;
   mentionsEveryOne?: boolean;
+  /** @deprecated use `mentionsEveryOne` instead. Kept for backward compatibility; will be removed in a future release. */
+  everyOne?: boolean;
   mentioned?: string[];
   webhookUrl?: string;
   messageId?: string;
@@ -45,6 +47,8 @@ export class Metadata {
   quoted?: Quoted;
   linkPreview?: boolean;
   mentionsEveryOne?: boolean;
+  /** @deprecated use `mentionsEveryOne` instead. Kept for backward compatibility; will be removed in a future release. */
+  everyOne?: boolean;
   mentioned?: string[];
   encoding?: boolean;
   notConvertSticker?: boolean;

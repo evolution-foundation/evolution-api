@@ -78,6 +78,7 @@ export const textMessageSchema: JSONSchema7 = {
     },
     quoted: { ...quotedOptionsSchema },
     mentionsEveryOne: { type: 'boolean', enum: [true, false] },
+    everyOne: { type: 'boolean', enum: [true, false], description: 'Deprecated alias for "mentionsEveryOne".' },
     mentioned: {
       type: 'array',
       minItems: 1,
@@ -117,6 +118,7 @@ export const mediaMessageSchema: JSONSchema7 = {
     },
     quoted: { ...quotedOptionsSchema },
     mentionsEveryOne: { type: 'boolean', enum: [true, false] },
+    everyOne: { type: 'boolean', enum: [true, false], description: 'Deprecated alias for "mentionsEveryOne".' },
     mentioned: {
       type: 'array',
       minItems: 1,
@@ -143,6 +145,7 @@ export const ptvMessageSchema: JSONSchema7 = {
     },
     quoted: { ...quotedOptionsSchema },
     mentionsEveryOne: { type: 'boolean', enum: [true, false] },
+    everyOne: { type: 'boolean', enum: [true, false], description: 'Deprecated alias for "mentionsEveryOne".' },
     mentioned: {
       type: 'array',
       minItems: 1,
@@ -169,6 +172,7 @@ export const audioMessageSchema: JSONSchema7 = {
     },
     quoted: { ...quotedOptionsSchema },
     mentionsEveryOne: { type: 'boolean', enum: [true, false] },
+    everyOne: { type: 'boolean', enum: [true, false], description: 'Deprecated alias for "mentionsEveryOne".' },
     mentioned: {
       type: 'array',
       minItems: 1,
@@ -219,6 +223,7 @@ export const stickerMessageSchema: JSONSchema7 = {
     },
     quoted: { ...quotedOptionsSchema },
     mentionsEveryOne: { type: 'boolean', enum: [true, false] },
+    everyOne: { type: 'boolean', enum: [true, false], description: 'Deprecated alias for "mentionsEveryOne".' },
     mentioned: {
       type: 'array',
       minItems: 1,
@@ -248,6 +253,7 @@ export const locationMessageSchema: JSONSchema7 = {
     },
     quoted: { ...quotedOptionsSchema },
     mentionsEveryOne: { type: 'boolean', enum: [true, false] },
+    everyOne: { type: 'boolean', enum: [true, false], description: 'Deprecated alias for "mentionsEveryOne".' },
     mentioned: {
       type: 'array',
       minItems: 1,
@@ -335,6 +341,7 @@ export const pollMessageSchema: JSONSchema7 = {
     },
     quoted: { ...quotedOptionsSchema },
     mentionsEveryOne: { type: 'boolean', enum: [true, false] },
+    everyOne: { type: 'boolean', enum: [true, false], description: 'Deprecated alias for "mentionsEveryOne".' },
     mentioned: {
       type: 'array',
       minItems: 1,
@@ -392,6 +399,7 @@ export const listMessageSchema: JSONSchema7 = {
     },
     quoted: { ...quotedOptionsSchema },
     mentionsEveryOne: { type: 'boolean', enum: [true, false] },
+    everyOne: { type: 'boolean', enum: [true, false], description: 'Deprecated alias for "mentionsEveryOne".' },
     mentioned: {
       type: 'array',
       minItems: 1,
@@ -443,6 +451,7 @@ export const buttonsMessageSchema: JSONSchema7 = {
     },
     quoted: { ...quotedOptionsSchema },
     mentionsEveryOne: { type: 'boolean', enum: [true, false] },
+    everyOne: { type: 'boolean', enum: [true, false], description: 'Deprecated alias for "mentionsEveryOne".' },
     mentioned: {
       type: 'array',
       minItems: 1,
