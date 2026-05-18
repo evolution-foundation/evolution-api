@@ -5,6 +5,7 @@ import {
   evoaiController,
   evolutionBotController,
   flowiseController,
+  minimaxController,
   n8nController,
   openaiController,
   typebotController,
@@ -104,6 +105,8 @@ export class ChatbotController {
     evoaiController.emit(emitData);
 
     flowiseController.emit(emitData);
+
+    minimaxController.emit(emitData);
   }
 
   public processDebounce(

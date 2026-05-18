@@ -111,6 +111,9 @@ model Instance {
   Evoai                   Evoai[]
   EvoaiSetting            EvoaiSetting?
   Pusher                  Pusher?
+  MinimaxCreds            MinimaxCreds[]
+  MinimaxBot              MinimaxBot[]
+  MinimaxSetting          MinimaxSetting?
 }
 
 model Session {
@@ -492,6 +495,73 @@ model OpenaiSetting {
   openaiIdFallback String?      @db.VarChar(100)
   Instance         Instance     @relation(fields: [instanceId], references: [id], onDelete: Cascade)
   instanceId       String       @unique
+}
+
+model MinimaxCreds {
+  id              String          @id @default(cuid())
+  name            String?         @unique @db.VarChar(255)
+  apiKey          String?         @unique @db.VarChar(255)
+  createdAt       DateTime?       @default(dbgenerated("CURRENT_TIMESTAMP")) @db.Timestamp
+  updatedAt       DateTime        @updatedAt @db.Timestamp
+  Instance        Instance        @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  instanceId      String
+  MinimaxBot      MinimaxBot[]
+  MinimaxSetting  MinimaxSetting?
+}
+
+model MinimaxBot {
+  id                String           @id @default(cuid())
+  enabled           Boolean          @default(true)
+  description       String?          @db.VarChar(255)
+  model             String?          @db.VarChar(100)
+  systemMessages    Json?            @db.Json
+  assistantMessages Json?            @db.Json
+  userMessages      Json?            @db.Json
+  maxTokens         Int?             @db.Int
+  expire            Int?             @default(0) @db.Int
+  keywordFinish     String?          @db.VarChar(100)
+  delayMessage      Int?             @db.Int
+  unknownMessage    String?          @db.VarChar(100)
+  listeningFromMe   Boolean?         @default(false)
+  stopBotFromMe     Boolean?         @default(false)
+  keepOpen          Boolean?         @default(false)
+  debounceTime      Int?             @db.Int
+  splitMessages     Boolean?         @default(false)
+  timePerChar       Int?             @default(50) @db.Int
+  ignoreJids        Json?
+  triggerType       TriggerType?
+  triggerOperator   TriggerOperator?
+  triggerValue      String?
+  createdAt         DateTime?        @default(dbgenerated("CURRENT_TIMESTAMP")) @db.Timestamp
+  updatedAt         DateTime         @updatedAt @db.Timestamp
+  MinimaxCreds      MinimaxCreds     @relation(fields: [minimaxCredsId], references: [id], onDelete: Cascade)
+  minimaxCredsId    String
+  Instance          Instance         @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  instanceId        String
+  MinimaxSetting    MinimaxSetting[]
+}
+
+model MinimaxSetting {
+  id                String        @id @default(cuid())
+  expire            Int?          @default(0) @db.Int
+  keywordFinish     String?       @db.VarChar(100)
+  delayMessage      Int?          @db.Int
+  unknownMessage    String?       @db.VarChar(100)
+  listeningFromMe   Boolean?      @default(false)
+  stopBotFromMe     Boolean?      @default(false)
+  keepOpen          Boolean?      @default(false)
+  debounceTime      Int?          @db.Int
+  ignoreJids        Json?
+  splitMessages     Boolean?      @default(false)
+  timePerChar       Int?          @default(50) @db.Int
+  createdAt         DateTime?     @default(dbgenerated("CURRENT_TIMESTAMP")) @db.Timestamp
+  updatedAt         DateTime      @updatedAt @db.Timestamp
+  MinimaxCreds      MinimaxCreds? @relation(fields: [minimaxCredsId], references: [id])
+  minimaxCredsId    String        @unique
+  Fallback          MinimaxBot?   @relation(fields: [minimaxIdFallback], references: [id])
+  minimaxIdFallback String?       @db.VarChar(100)
+  Instance          Instance      @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  instanceId        String        @unique
 }
 
 model Template {

@@ -28,6 +28,8 @@ import { EvolutionBotController } from './integrations/chatbot/evolutionBot/cont
 import { EvolutionBotService } from './integrations/chatbot/evolutionBot/services/evolutionBot.service';
 import { FlowiseController } from './integrations/chatbot/flowise/controllers/flowise.controller';
 import { FlowiseService } from './integrations/chatbot/flowise/services/flowise.service';
+import { MinimaxController } from './integrations/chatbot/minimax/controllers/minimax.controller';
+import { MinimaxService } from './integrations/chatbot/minimax/services/minimax.service';
 import { N8nController } from './integrations/chatbot/n8n/controllers/n8n.controller';
 import { N8nService } from './integrations/chatbot/n8n/services/n8n.service';
 import { OpenaiController } from './integrations/chatbot/openai/controllers/openai.controller';
@@ -137,5 +139,8 @@ export const n8nController = new N8nController(n8nService, prismaRepository, waM
 
 const evoaiService = new EvoaiService(waMonitor, prismaRepository, configService, openaiService);
 export const evoaiController = new EvoaiController(evoaiService, prismaRepository, waMonitor);
+
+const minimaxService = new MinimaxService(waMonitor, prismaRepository, configService);
+export const minimaxController = new MinimaxController(minimaxService, prismaRepository, waMonitor);
 
 logger.info('Module - ON');
