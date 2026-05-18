@@ -752,7 +752,7 @@ export class ChannelStartupService {
           JSON_UNQUOTE(JSON_EXTRACT(Message.key, '$.remoteJid')) as remoteJid,
           CASE
             WHEN JSON_UNQUOTE(JSON_EXTRACT(Message.key, '$.remoteJid')) LIKE '%@g.us' THEN COALESCE(Chat.name, Contact.pushName)
-            ELSE COALESCE(Contact.pushName, Message.pushName)
+            ELSE Contact.pushName
           END as pushName,
           Contact.profilePicUrl,
           COALESCE(
@@ -811,14 +811,13 @@ export class ChannelStartupService {
             "Message"."key"->>'remoteJid' as "remoteJid",
             CASE
               WHEN "Message"."key"->>'remoteJid' LIKE '%@g.us' THEN COALESCE("Chat"."name", "Contact"."pushName")
-              ELSE COALESCE("Contact"."pushName", "Message"."pushName")
+              ELSE "Contact"."pushName"
             END as "pushName",
             "Contact"."profilePicUrl",
             COALESCE(
               to_timestamp("Message"."messageTimestamp"::double precision),
               "Contact"."updatedAt"
             ) as "updatedAt",
-            "Chat"."name" as "pushName",
             "Chat"."createdAt" as "windowStart",
             "Chat"."createdAt" + INTERVAL '24 hours' as "windowExpires",
             "Chat"."unreadMessages" as "unreadMessages",
