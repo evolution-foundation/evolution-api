@@ -1,4 +1,4 @@
-import { getCollectionsDto } from '@api/dto/business.dto';
+﻿import { getCollectionsDto } from '@api/dto/business.dto';
 import { OfferCallDto } from '@api/dto/call.dto';
 import {
   ArchiveChatDto,
@@ -4774,6 +4774,20 @@ export class BaileysStartupService extends ChannelStartupService {
       predefinedId: label.predefinedId,
     }));
   }
+
+  public async syncLabels(): Promise<LabelDto[]> {
+    // Force Baileys to re-download label app state from WhatsApp (incremental)
+    // Using true for isLatest = incremental sync (safe, no disconnect)
+    // Using false would download full snapshot and may cause disconnection
+    await this.client.resyncAppState(['regular'], true);
+
+    // Wait for LABELS_EDIT and LABELS_ASSOCIATION events to be processed
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
+    // Return the now-updated labels from database
+    return this.fetchLabels();
+  }
+
 
   public async handleLabel(data: HandleLabelDto) {
     const whatsappContact = await this.whatsappNumber({ numbers: [data.number] });
