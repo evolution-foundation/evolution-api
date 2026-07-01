@@ -2342,7 +2342,7 @@ export class BaileysStartupService extends ChannelStartupService {
     this.logger.verbose(`Sending message to ${sender}`);
 
     try {
-      if (options?.delay) {
+      if (options?.delay && !isJidNewsletter(sender)) {
         this.logger.verbose(`Typing for ${options.delay}ms to ${sender}`);
         if (options.delay > 20000) {
           let remainingDelay = options.delay;
@@ -3577,8 +3577,9 @@ export class BaileysStartupService extends ChannelStartupService {
     const jids: {
       groups: { number: string; jid: string }[];
       broadcast: { number: string; jid: string }[];
+      newsletters: { number: string; jid: string }[];
       users: { number: string; jid: string; name?: string }[];
-    } = { groups: [], broadcast: [], users: [] };
+    } = { groups: [], broadcast: [], newsletters: [], users: [] };
 
     data.numbers.forEach((number) => {
       const jid = createJid(number);
@@ -3587,6 +3588,8 @@ export class BaileysStartupService extends ChannelStartupService {
         jids.groups.push({ number, jid });
       } else if (jid === 'status@broadcast') {
         jids.broadcast.push({ number, jid });
+      } else if (isJidNewsletter(jid)) {
+        jids.newsletters.push({ number, jid });
       } else {
         jids.users.push({ number, jid });
       }
@@ -3596,6 +3599,9 @@ export class BaileysStartupService extends ChannelStartupService {
 
     // BROADCAST
     onWhatsapp.push(...jids.broadcast.map(({ jid, number }) => new OnWhatsAppDto(jid, false, number)));
+
+    // NEWSLETTERS
+    onWhatsapp.push(...jids.newsletters.map(({ jid, number }) => new OnWhatsAppDto(jid, true, number)));
 
     // GROUPS
     const groups = await Promise.all(
