@@ -135,7 +135,7 @@ replaceInFile('Utils/messages.js', [
         });`,
   },
   {
-    marker: 'thumbnailDirectPath,',
+    marker: "thumbnailSha256: thumbnailSha256 ? Buffer.from(thumbnailSha256, 'base64') : undefined,",
     from: `                url: mediaUrl,
                 directPath,
                 fileSha256,

@@ -2782,7 +2782,7 @@ export class BaileysStartupService extends ChannelStartupService {
     return statusSent;
   }
 
-  private async prepareMediaMessage(mediaMessage: MediaMessage) {
+  private async prepareMediaMessage(mediaMessage: MediaMessage, jid?: string) {
     try {
       const type = mediaMessage.mediatype === 'ptv' ? 'video' : mediaMessage.mediatype;
 
@@ -2843,7 +2843,10 @@ export class BaileysStartupService extends ChannelStartupService {
         {
           [type]: mediaInput,
         } as any,
-        { upload: this.client.waUploadToServer },
+        {
+          upload: this.client.waUploadToServer,
+          jid,
+        },
       );
 
       const mediaType = mediaMessage.mediatype + 'Message';
@@ -2952,7 +2955,7 @@ export class BaileysStartupService extends ChannelStartupService {
       }
 
       return generateWAMessageFromContent(
-        '',
+        jid ?? '',
         { [mediaType]: { ...prepareMedia[mediaType] } },
         { userJid: this.instance.wuid },
       );
@@ -3052,7 +3055,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (file) mediaData.media = file.buffer.toString('base64');
 
-    const generate = await this.prepareMediaMessage(mediaData);
+    const generate = await this.prepareMediaMessage(mediaData, createJid(data.number));
 
     const mediaSent = await this.sendMessageWithTyping(
       data.number,
@@ -3083,7 +3086,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (file) mediaData.media = file.buffer.toString('base64');
 
-    const generate = await this.prepareMediaMessage(mediaData);
+    const generate = await this.prepareMediaMessage(mediaData, createJid(data.number));
 
     const mediaSent = await this.sendMessageWithTyping(
       data.number,
