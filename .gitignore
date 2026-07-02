@@ -38,6 +38,7 @@ lerna-debug.log*
 !/test/
 /test/*
 !/test/createJid.test.ts
+!/test/baileysNewsletterMediaPatch.test.ts
 /src/env.yml
 /store
 *.env
