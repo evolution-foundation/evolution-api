@@ -90,6 +90,11 @@ export class MarkChatUnreadDto {
   chat?: string;
 }
 
+export class LimitSharingDto {
+  chat: string;
+  limitSharing: boolean;
+}
+
 export class PrivacySettingDto {
   readreceipts: WAReadReceiptsValue;
   profile: WAPrivacyValue;

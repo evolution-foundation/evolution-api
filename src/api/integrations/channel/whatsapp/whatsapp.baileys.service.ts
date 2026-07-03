@@ -6,6 +6,7 @@ import {
   DeleteMessage,
   getBase64FromMediaMessageDto,
   LastMessage,
+  LimitSharingDto,
   MarkChatUnreadDto,
   MarkMessageAsPlayedDto,
   NumberBusiness,
@@ -4259,6 +4260,24 @@ export class BaileysStartupService extends ChannelStartupService {
       throw new InternalServerErrorException({
         markedChatUnread: false,
         message: ['An error occurred while marked unread the chat. Open a calling.', error.toString()],
+      });
+    }
+  }
+
+  public async updateLimitSharing(data: LimitSharingDto) {
+    try {
+      const remoteJid = createJid(data.chat);
+      const response = await this.client.sendMessage(remoteJid, { limitSharing: data.limitSharing });
+
+      return {
+        chatId: remoteJid,
+        limitSharing: data.limitSharing,
+        message: response,
+      };
+    } catch (error) {
+      throw new InternalServerErrorException({
+        limitSharing: false,
+        message: ['An error occurred while updating advanced chat privacy.', error.toString()],
       });
     }
   }
