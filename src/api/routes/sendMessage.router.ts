@@ -1,5 +1,6 @@
 import { RouterBroker } from '@api/abstract/abstract.router';
 import {
+  ForwardMessageDto,
   SendAudioDto,
   SendButtonsDto,
   SendContactDto,
@@ -19,6 +20,7 @@ import {
   audioMessageSchema,
   buttonsMessageSchema,
   contactMessageSchema,
+  forwardMessageSchema,
   listMessageSchema,
   locationMessageSchema,
   mediaMessageSchema,
@@ -57,6 +59,16 @@ export class MessageRouter extends RouterBroker {
           schema: textMessageSchema,
           ClassRef: SendTextDto,
           execute: (instance, data) => sendMessageController.sendText(instance, data),
+        });
+
+        return res.status(HttpStatus.CREATED).json(response);
+      })
+      .post(this.routerPath('forwardMessage'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<ForwardMessageDto>({
+          request: req,
+          schema: forwardMessageSchema,
+          ClassRef: ForwardMessageDto,
+          execute: (instance, data) => sendMessageController.forwardMessage(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);

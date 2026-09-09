@@ -22,11 +22,14 @@ import {
   GroupDescriptionDto,
   GroupInvite,
   GroupJid,
+  GroupJoinApprovalModeDto,
+  GroupMemberAddModeDto,
   GroupPictureDto,
   GroupSendInvite,
   GroupSubjectDto,
   GroupToggleEphemeralDto,
   GroupUpdateParticipantDto,
+  GroupUpdateParticipantRequestDto,
   GroupUpdateSettingDto,
 } from '@api/dto/group.dto';
 import { InstanceDto, SetPresenceDto } from '@api/dto/instance.dto';
@@ -34,6 +37,7 @@ import { HandleLabelDto, LabelDto } from '@api/dto/label.dto';
 import {
   Button,
   ContactMessage,
+  ForwardMessageDto,
   KeyType,
   MediaMessage,
   Options,
@@ -223,6 +227,12 @@ async function getVideoDuration(input: Buffer | string | Readable): Promise<numb
 
   return Math.round(parseFloat(duration));
 }
+
+// Throttle global de groupMetadata: serializa e espaca as buscas pra nao
+// estourar o rate-limit (429) do WhatsApp em contas com centenas de grupos.
+let __groupMetaChain: Promise<unknown> = Promise.resolve();
+let __groupMetaLastAt = 0;
+const __GROUP_META_MIN_INTERVAL_MS = 2000;
 
 export class BaileysStartupService extends ChannelStartupService {
   private messageProcessor = new BaileysMessageProcessor();
@@ -550,6 +560,20 @@ export class BaileysStartupService extends ChannelStartupService {
       return webMessageInfo[0].message;
     } catch {
       return { conversation: '' };
+    }
+  }
+
+  public async forwardMessage(data: ForwardMessageDto) {
+    try {
+      const fullMsg = (await this.getMessage({ id: data.messageId }, true)) as unknown as WAMessage;
+      if (!fullMsg?.message) {
+        throw new BadRequestException('Message not found');
+      }
+      const number = data.number.replace(/\D/g, '');
+      const jid = data.number.includes('@') ? data.number : `${number}@s.whatsapp.net`;
+      return await this.client.sendMessage(jid, { forward: fullMsg });
+    } catch (error) {
+      throw new BadRequestException('Error forwarding message', error.toString());
     }
   }
 
@@ -4285,21 +4309,24 @@ export class BaileysStartupService extends ChannelStartupService {
 
   // Group
   private async updateGroupMetadataCache(groupJid: string) {
-    try {
-      const meta = await this.client.groupMetadata(groupJid);
-
-      const cacheConf = this.configService.get<CacheConf>('CACHE');
-
-      if ((cacheConf?.REDIS?.ENABLED && cacheConf?.REDIS?.URI !== '') || cacheConf?.LOCAL?.ENABLED) {
-        this.logger.verbose(`Updating cache for group: ${groupJid}`);
-        await groupMetadataCache.set(groupJid, { timestamp: Date.now(), data: meta });
+    const task = __groupMetaChain.then(async () => {
+      const wait = __GROUP_META_MIN_INTERVAL_MS - (Date.now() - __groupMetaLastAt);
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      __groupMetaLastAt = Date.now();
+      try {
+        const meta = await this.client.groupMetadata(groupJid);
+        const cacheConf = this.configService.get<CacheConf>('CACHE');
+        if ((cacheConf?.REDIS?.ENABLED && cacheConf?.REDIS?.URI !== '') || cacheConf?.LOCAL?.ENABLED) {
+          await groupMetadataCache.set(groupJid, { timestamp: Date.now(), data: meta });
+        }
+        return meta;
+      } catch (error) {
+        this.logger.error(error);
+        return null;
       }
-
-      return meta;
-    } catch (error) {
-      this.logger.error(error);
-      return null;
-    }
+    });
+    __groupMetaChain = task.then(() => undefined, () => undefined);
+    return task;
   }
 
   private getGroupMetadataCache = async (groupJid: string) => {
@@ -4432,6 +4459,15 @@ export class BaileysStartupService extends ChannelStartupService {
         descId: group.descId,
         restrict: group.restrict,
         announce: group.announce,
+        joinApprovalMode: group.joinApprovalMode,
+        memberAddMode: group.memberAddMode,
+        // In complete Baileys metadata, an absent ephemeral node means disabled.
+        ephemeralDuration:
+          typeof group.joinApprovalMode === 'boolean' && typeof group.memberAddMode === 'boolean'
+            ? group.ephemeralDuration === undefined
+              ? 0
+              : group.ephemeralDuration
+            : group.ephemeralDuration,
         participants: group.participants,
         isCommunity: group.isCommunity,
         isCommunityAnnounce: group.isCommunityAnnounce,
@@ -4450,7 +4486,8 @@ export class BaileysStartupService extends ChannelStartupService {
 
     let groups = [];
     for (const group of fetch) {
-      const picture = await this.profilePicture(group.id);
+      const wantDetails = getParticipants.getParticipants == 'true';
+      const picture = wantDetails ? await this.profilePicture(group.id) : null;
 
       const result = {
         id: group.id,
@@ -4465,6 +4502,15 @@ export class BaileysStartupService extends ChannelStartupService {
         descId: group.descId,
         restrict: group.restrict,
         announce: group.announce,
+        joinApprovalMode: group.joinApprovalMode,
+        memberAddMode: group.memberAddMode,
+        // In complete Baileys metadata, an absent ephemeral node means disabled.
+        ephemeralDuration:
+          typeof group.joinApprovalMode === 'boolean' && typeof group.memberAddMode === 'boolean'
+            ? group.ephemeralDuration === undefined
+              ? 0
+              : group.ephemeralDuration
+            : group.ephemeralDuration,
         isCommunity: group.isCommunity,
         isCommunityAnnounce: group.isCommunityAnnounce,
         linkedParent: group.linkedParent,
@@ -4594,6 +4640,43 @@ export class BaileysStartupService extends ChannelStartupService {
       return { success: true };
     } catch (error) {
       throw new BadRequestException('Error updating setting', error.toString());
+    }
+  }
+
+  public async updateMemberAddMode(update: GroupMemberAddModeDto) {
+    try {
+      await this.client.groupMemberAddMode(update.groupJid, update.mode);
+      return { success: true };
+    } catch (error) {
+      throw new BadRequestException('Error updating member add mode', error.toString());
+    }
+  }
+
+  public async updateJoinApprovalMode(update: GroupJoinApprovalModeDto) {
+    try {
+      await this.client.groupJoinApprovalMode(update.groupJid, update.mode);
+      return { success: true };
+    } catch (error) {
+      throw new BadRequestException('Error updating join approval mode', error.toString());
+    }
+  }
+
+  public async findParticipantRequests(id: GroupJid) {
+    try {
+      const requests = await this.client.groupRequestParticipantsList(id.groupJid);
+      return { requests: requests || [] };
+    } catch (error) {
+      throw new BadRequestException('Error fetching participant requests', error.toString());
+    }
+  }
+
+  public async updateParticipantRequests(update: GroupUpdateParticipantRequestDto) {
+    try {
+      const participants = update.participants.map((p) => (p.includes('@') ? p : `${p}@s.whatsapp.net`));
+      const result = await this.client.groupRequestParticipantsUpdate(update.groupJid, participants, update.action);
+      return { updateParticipantRequests: result };
+    } catch (error) {
+      throw new BadRequestException('Error updating participant requests', error.toString());
     }
   }
 

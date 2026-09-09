@@ -159,6 +159,45 @@ export const toggleEphemeralSchema: JSONSchema7 = {
   ...isNotEmpty('groupJid', 'expiration'),
 };
 
+export const memberAddModeSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    groupJid: { type: 'string' },
+    mode: { type: 'string', enum: ['admin_add', 'all_member_add'] },
+  },
+  required: ['groupJid', 'mode'],
+  ...isNotEmpty('groupJid', 'mode'),
+};
+
+export const joinApprovalModeSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    groupJid: { type: 'string' },
+    mode: { type: 'string', enum: ['on', 'off'] },
+  },
+  required: ['groupJid', 'mode'],
+  ...isNotEmpty('groupJid', 'mode'),
+};
+
+export const updateParticipantRequestSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    groupJid: { type: 'string' },
+    action: { type: 'string', enum: ['approve', 'reject'] },
+    participants: {
+      type: 'array',
+      minItems: 1,
+      uniqueItems: true,
+      items: { type: 'string' },
+    },
+  },
+  required: ['groupJid', 'action', 'participants'],
+  ...isNotEmpty('groupJid', 'action'),
+};
+
 export const updateGroupPictureSchema: JSONSchema7 = {
   $id: v4(),
   type: 'object',
