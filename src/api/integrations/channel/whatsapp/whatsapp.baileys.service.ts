@@ -4459,6 +4459,15 @@ export class BaileysStartupService extends ChannelStartupService {
         descId: group.descId,
         restrict: group.restrict,
         announce: group.announce,
+        joinApprovalMode: group.joinApprovalMode,
+        memberAddMode: group.memberAddMode,
+        // In complete Baileys metadata, an absent ephemeral node means disabled.
+        ephemeralDuration:
+          typeof group.joinApprovalMode === 'boolean' && typeof group.memberAddMode === 'boolean'
+            ? group.ephemeralDuration === undefined
+              ? 0
+              : group.ephemeralDuration
+            : group.ephemeralDuration,
         participants: group.participants,
         isCommunity: group.isCommunity,
         isCommunityAnnounce: group.isCommunityAnnounce,
@@ -4493,6 +4502,15 @@ export class BaileysStartupService extends ChannelStartupService {
         descId: group.descId,
         restrict: group.restrict,
         announce: group.announce,
+        joinApprovalMode: group.joinApprovalMode,
+        memberAddMode: group.memberAddMode,
+        // In complete Baileys metadata, an absent ephemeral node means disabled.
+        ephemeralDuration:
+          typeof group.joinApprovalMode === 'boolean' && typeof group.memberAddMode === 'boolean'
+            ? group.ephemeralDuration === undefined
+              ? 0
+              : group.ephemeralDuration
+            : group.ephemeralDuration,
         isCommunity: group.isCommunity,
         isCommunityAnnounce: group.isCommunityAnnounce,
         linkedParent: group.linkedParent,
