@@ -1,4 +1,8 @@
-FROM node:24-alpine AS builder
+# Pinned to a patched Node.js 24 LTS release (October 2026 security release,
+# CVE-2026-111497). Keep tag and digest in sync when bumping.
+ARG NODE_IMAGE=node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+
+FROM ${NODE_IMAGE} AS builder
 
 RUN apk update && \
     apk add --no-cache git ffmpeg wget curl bash openssl
@@ -43,7 +47,7 @@ ENV LICENSE_ENDPOINT_XOR_KEY=${LICENSE_ENDPOINT_XOR_KEY}
 
 RUN NODE_OPTIONS="--max-old-space-size=2048" npm run build
 
-FROM node:24-alpine AS final
+FROM ${NODE_IMAGE} AS final
 
 RUN apk update && \
     apk add tzdata ffmpeg bash openssl
