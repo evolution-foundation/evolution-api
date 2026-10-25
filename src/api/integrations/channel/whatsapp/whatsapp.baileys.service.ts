@@ -687,10 +687,11 @@ export class BaileysStartupService extends ChannelStartupService {
     }
   }
 
-  // deleteMessage marks the row (status/key.deleted); both it and the messages.update revoke record a
-  // 'DELETED' MessageUpdate. The row lookup in deleteMessage is not scoped to the instance, so in a group
-  // shared by several instances the mark can land on another instance's copy; matching the MessageUpdate
-  // by instance + key id still finds it.
+  // deleteMessage and the messages.update revoke mark the row as DELETED and record a 'DELETED' MessageUpdate.
+  // The row mark can be overwritten later (a protocolMessage revoke arriving through messages.upsert writes
+  // EDITED, an ack writes its status), so the MessageUpdate is checked too. It is matched by instance + key id,
+  // not messageId: before deleteMessage was scoped to the instance, its MessageUpdate could point at another
+  // instance's copy of the message.
   private async isMessageDeleted(keyId: string, row: any): Promise<boolean> {
     if (!row) {
       return false;
@@ -1919,6 +1920,20 @@ export class BaileysStartupService extends ChannelStartupService {
 
           if (update.message === null && update.status === undefined) {
             this.sendDataWebhook(Events.MESSAGES_DELETE, { ...key, status: 'DELETED' });
+
+            // Marking the row lets getMessage refuse the resend even when SAVE_DATA.MESSAGE_UPDATE is off.
+            if (findMessage?.id) {
+              try {
+                await this.prismaRepository.message.update({
+                  where: { id: findMessage.id },
+                  data: { status: 'DELETED' },
+                });
+              } catch (error) {
+                this.logger.warn(
+                  `Failed to mark revoked message ${findMessage.id} as deleted: ${error?.message ?? error}`,
+                );
+              }
+            }
 
             // Recorded as DELETED (not the SERVER_ACK fallback) so getMessage can refuse to resend it.
             if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE)
