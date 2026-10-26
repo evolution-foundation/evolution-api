@@ -758,7 +758,7 @@ export class BusinessStartupService extends ChannelStartupService {
               where: {
                 instanceId: this.instanceId,
                 key: {
-                  path: ['id'],
+                  path: this.prismaRepository.jsonPath('id'),
                   equals: key.id,
                 },
               },

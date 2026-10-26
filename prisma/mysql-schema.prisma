@@ -249,6 +249,8 @@ model Label {
   updatedAt    DateTime  @updatedAt @db.Timestamp
   Instance     Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)
   instanceId   String
+
+  @@unique([labelId, instanceId])
 }
 
 model Proxy {
@@ -655,6 +657,7 @@ model IsOnWhatsapp {
   id         String   @id @default(cuid())
   remoteJid  String   @unique @db.VarChar(100)
   jidOptions String
+  lid        String?  @db.VarChar(100)
   createdAt  DateTime @default(dbgenerated("CURRENT_TIMESTAMP")) @db.Timestamp
   updatedAt  DateTime @updatedAt @db.Timestamp
 }

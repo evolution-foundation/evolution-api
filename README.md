@@ -192,6 +192,23 @@ Join our [community](https://evolutionfoundation.com.br/community) to discuss id
 
 ---
 
+## MySQL compatibility in this fork
+
+Set `DATABASE_PROVIDER=mysql` and a dedicated MySQL `DATABASE_CONNECTION_URI` before building.
+`npm run build` generates the provider-specific Prisma client before type-checking and bundling.
+Do not skip the TypeScript check or generate a PostgreSQL client for a MySQL deployment.
+
+Before starting the updated API, back up an existing database and run `npm run db:deploy`
+(`npm run db:deploy:win` on Windows). The added MySQL migration restores `IsOnWhatsapp.lid`
+and adds the compound `Label(labelId, instanceId)` unique index. It does not delete duplicate
+labels: if duplicates exist, resolve them deliberately before applying the migration. The existing
+upstream migration history is unchanged; review pending migrations when upgrading an older database.
+
+Compatibility tests use a disposable local MariaDB/MySQL database named
+`evolution_mysql_test_<digits>` after applying the MySQL migrations:
+`node --test test/mysql-compatibility.test.cjs`. They execute service methods without starting
+WhatsApp or contacting external services. The live WhatsApp connection still needs a separate smoke test.
+
 ## Security
 
 For security issues, **do not open a public issue**. Email **suporte@evofoundation.com.br** or use GitHub's private vulnerability reporting. See [SECURITY.md](./SECURITY.md) for details.

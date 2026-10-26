@@ -623,10 +623,16 @@ export class ChannelStartupService {
         messageType: query?.where?.messageType,
         ...timestampFilter,
         AND: [
-          keyFilters?.id ? { key: { path: ['id'], equals: keyFilters?.id } } : {},
-          keyFilters?.fromMe ? { key: { path: ['fromMe'], equals: keyFilters?.fromMe } } : {},
-          keyFilters?.remoteJid ? { key: { path: ['remoteJid'], equals: keyFilters?.remoteJid } } : {},
-          keyFilters?.participants ? { key: { path: ['participants'], equals: keyFilters?.participants } } : {},
+          keyFilters?.id ? { key: { path: this.prismaRepository.jsonPath('id'), equals: keyFilters?.id } } : {},
+          keyFilters?.fromMe
+            ? { key: { path: this.prismaRepository.jsonPath('fromMe'), equals: keyFilters?.fromMe } }
+            : {},
+          keyFilters?.remoteJid
+            ? { key: { path: this.prismaRepository.jsonPath('remoteJid'), equals: keyFilters?.remoteJid } }
+            : {},
+          keyFilters?.participants
+            ? { key: { path: this.prismaRepository.jsonPath('participants'), equals: keyFilters?.participants } }
+            : {},
         ],
       },
     });
@@ -647,10 +653,16 @@ export class ChannelStartupService {
         messageType: query?.where?.messageType,
         ...timestampFilter,
         AND: [
-          keyFilters?.id ? { key: { path: ['id'], equals: keyFilters?.id } } : {},
-          keyFilters?.fromMe ? { key: { path: ['fromMe'], equals: keyFilters?.fromMe } } : {},
-          keyFilters?.remoteJid ? { key: { path: ['remoteJid'], equals: keyFilters?.remoteJid } } : {},
-          keyFilters?.participants ? { key: { path: ['participants'], equals: keyFilters?.participants } } : {},
+          keyFilters?.id ? { key: { path: this.prismaRepository.jsonPath('id'), equals: keyFilters?.id } } : {},
+          keyFilters?.fromMe
+            ? { key: { path: this.prismaRepository.jsonPath('fromMe'), equals: keyFilters?.fromMe } }
+            : {},
+          keyFilters?.remoteJid
+            ? { key: { path: this.prismaRepository.jsonPath('remoteJid'), equals: keyFilters?.remoteJid } }
+            : {},
+          keyFilters?.participants
+            ? { key: { path: this.prismaRepository.jsonPath('participants'), equals: keyFilters?.participants } }
+            : {},
         ],
       },
       orderBy: {
@@ -741,7 +753,56 @@ export class ChannelStartupService {
     const limit = query?.take ? Prisma.sql`LIMIT ${query.take}` : Prisma.sql``;
     const offset = query?.skip ? Prisma.sql`OFFSET ${query.skip}` : Prisma.sql``;
 
-    const results = await this.prismaRepository.$queryRaw`
+    const results = this.prismaRepository.isMysql
+      ? await this.prismaRepository.$queryRaw<any[]>(Prisma.sql`
+        WITH rankedMessages AS (
+          SELECT
+            c.id AS contactId,
+            JSON_UNQUOTE(JSON_EXTRACT(m.\`key\`, '$.remoteJid')) AS remoteJid,
+            ch.name AS pushName,
+            c.profilePicUrl,
+            COALESCE(FROM_UNIXTIME(m.messageTimestamp), c.updatedAt) AS updatedAt,
+            ch.createdAt AS windowStart,
+            DATE_ADD(ch.createdAt, INTERVAL 24 HOUR) AS windowExpires,
+            ch.unreadMessages,
+            IF(DATE_ADD(ch.createdAt, INTERVAL 24 HOUR) > NOW(), 1, 0) AS windowActive,
+            m.id AS lastMessageId,
+            CAST(m.\`key\` AS CHAR) AS lastMessage_key,
+            CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(m.\`key\`, '$.fromMe')) = 'true'
+              THEN 'Você' ELSE m.pushName END AS lastMessagePushName,
+            m.participant AS lastMessageParticipant,
+            m.messageType AS lastMessageMessageType,
+            CAST(m.message AS CHAR) AS lastMessageMessage,
+            CAST(m.contextInfo AS CHAR) AS lastMessageContextInfo,
+            m.source AS lastMessageSource,
+            m.messageTimestamp AS lastMessageMessageTimestamp,
+            m.instanceId AS lastMessageInstanceId,
+            m.sessionId AS lastMessageSessionId,
+            m.status AS lastMessageStatus,
+            ROW_NUMBER() OVER (
+              PARTITION BY JSON_UNQUOTE(JSON_EXTRACT(m.\`key\`, '$.remoteJid'))
+              ORDER BY m.messageTimestamp DESC, m.id DESC
+            ) AS rowNumber
+          FROM \`Message\` m
+          LEFT JOIN \`Contact\` c ON c.remoteJid = JSON_UNQUOTE(JSON_EXTRACT(m.\`key\`, '$.remoteJid'))
+            AND c.instanceId = m.instanceId
+          LEFT JOIN \`Chat\` ch ON ch.remoteJid = JSON_UNQUOTE(JSON_EXTRACT(m.\`key\`, '$.remoteJid'))
+            AND ch.instanceId = m.instanceId
+          WHERE m.instanceId = ${this.instanceId}
+          ${remoteJid ? Prisma.sql`AND JSON_UNQUOTE(JSON_EXTRACT(m.\`key\`, '$.remoteJid')) = ${remoteJid}` : Prisma.sql``}
+          ${
+            query?.where?.messageTimestamp?.gte && query?.where?.messageTimestamp?.lte
+              ? Prisma.sql`AND m.messageTimestamp >= ${Math.floor(new Date(query.where.messageTimestamp.gte).getTime() / 1000)}
+                AND m.messageTimestamp <= ${Math.floor(new Date(query.where.messageTimestamp.lte).getTime() / 1000)}`
+              : Prisma.sql``
+          }
+        )
+        SELECT * FROM rankedMessages WHERE rowNumber = 1
+        ORDER BY updatedAt DESC
+        ${query?.take ? limit : query?.skip ? Prisma.sql`LIMIT 18446744073709551615` : Prisma.sql``}
+        ${offset}
+      `)
+      : await this.prismaRepository.$queryRaw`
       WITH rankedMessages AS (
         SELECT DISTINCT ON ("Message"."key"->>'remoteJid') 
           "Contact"."id" as "contactId",
@@ -791,6 +852,13 @@ export class ChannelStartupService {
 
     if (results && isArray(results) && results.length > 0) {
       const mappedResults = results.map((contact) => {
+        if (this.prismaRepository.isMysql) {
+          // Both providers return the explicitly cast JSON as text; preserve the existing API values.
+          for (const field of ['lastMessage_key', 'lastMessageMessage', 'lastMessageContextInfo']) {
+            if (typeof contact[field] === 'string') contact[field] = JSON.parse(contact[field]);
+          }
+          contact.windowActive = Boolean(contact.windowActive);
+        }
         const lastMessage = contact.lastMessageId
           ? {
               id: contact.lastMessageId,
