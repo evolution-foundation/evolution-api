@@ -178,6 +178,8 @@ model Message {
   session   IntegrationSession? @relation(fields: [sessionId], references: [id])
 
   @@index([instanceId])
+  // Expression indexes on "key" (id, remoteJid, remoteJidAlt) are created in migration
+  // 20261028200000_add_message_key_indexes: Prisma cannot declare them here.
 }
 
 model MessageUpdate {
