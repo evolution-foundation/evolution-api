@@ -1,5 +1,5 @@
 # Evolution API — Briefing para Claude Code
-> Manutenção, Bugfixes e Extensão do Projeto | v2.3.7 | Fevereiro 2026
+> Manutenção, Bugfixes e Extensão do Projeto | v2.3.7 (fork) | Atualizado em Outubro 2026
 
 ---
 
@@ -13,15 +13,15 @@ Esta API é o backbone de atendimento ao cliente da **DGGirl** (e-commerce de mo
 
 ## 2. Stack Tecnológico
 
-- **Runtime:** Node.js (CommonJS)
+- **Runtime:** Node.js 24 (imagem `node:24-alpine`), CommonJS
 - **Linguagem:** TypeScript (strict)
 - **Framework:** Express.js
-- **ORM:** Prisma (PostgreSQL ou MySQL)
-- **WhatsApp:** Baileys (`@whiskeysockets/baileys`)
-- **Cache:** Redis + local cache
+- **ORM:** Prisma 6 (PostgreSQL 15 em produção)
+- **WhatsApp:** Baileys — pacote `baileys` versão fixa `7.0.0-rc14` (MIT, WhiskeySockets)
+- **Cache:** Redis 8.4.0 (imagem fixa, sem senha — protegido por firewall, ver Seção 5.1)
 - **Storage:** S3 / MinIO
 - **Message Queue:** RabbitMQ / SQS
-- **Process Manager:** PM2 (`pm2 restart ApiEvolution`)
+- **Execução:** Docker Compose (`docker-compose.yaml`) — **não usa PM2**
 - **Build:** tsup + tsc
 - **Lint:** ESLint
 - **Commits:** Commitizen (`npm run commit`)
@@ -92,58 +92,54 @@ N8N (trigger workflow)
 
 ---
 
-## 4. Bugs Conhecidos e PRs Pendentes
+## 4. Bugs Conhecidos e Correções
 
-### 4.1 Bug CRÍTICO — Loop Infinito de QR Code (PR #2365)
+### 4.1 Já corrigidos no fork
 
-**Arquivo:** `src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts`
-**Método:** `connectionUpdate()` — aproximadamente linhas 421-440
+| Problema | Onde / commit |
+|---|---|
+| Loop infinito de QR Code (PR #2365) | `connectionUpdate()` — guard `!this.instance.wuid && !statusCode` |
+| LID (`@lid`) → `@s.whatsapp.net` via `remoteJidAlt` | handlers de messages, receipts e contacts; tipos `LidMessageKey`/`LidContact` em `wa.types.ts` |
+| Senha do Postgres hardcoded no compose | `docker-compose.yaml` usa `${POSTGRES_PASSWORD}` |
+| **Segurança:** bypass entre instâncias via `?instanceName=` (upstream #2435) | `abstract.router.ts` — `a1822e04` |
+| Vulnerabilidades de dependências (`npm audit fix` sem `--force`) | `6c33fecf` |
+| Reconexão após `stream:error 515`, lista PRODUCT_LIST (`isZero`), áudio com `quoted`, envio para `@lid`, `mentionsEveryOne === true` | `2d14e4c7` |
+| `messages.update` criava chat já existente (erro de unique `instanceId, remoteJid`) | `51bc1b42` |
+| Baileys `7.0.0-rc.9` → `7.0.0-rc14` (GHSA-qvv5-jq5g-4cgg) | `1bedc0b4` |
 
-**Fix — adicionar ANTES da lógica de reconexão existente:**
-```typescript
-const isInitialConnection = !this.instance.wuid && this.instance.qrcode.count === 0;
-if (isInitialConnection) {
-  this.logger.info('Initial connection closed, waiting for QR code generation...');
-  return; // Impede o loop infinito
-}
-// ... lógica de reconexão existente para instâncias autenticadas continua abaixo
-```
+**Atenção ao portar fixes do upstream:** o fix original do #2435 removia `instanceName` também do body do `/instance/create`, o que quebraria a criação de instâncias. No fork, a sanitização vale só para a query de rotas com `:instanceName`. Sempre conferir efeitos colaterais antes de copiar.
 
-### 4.2 Bug CRÍTICO — LID (Linked Identity Device)
+### 4.2 Pendentes
 
-**Sintoma no log:**
-```
-{ remoteJid: '28952559136882@lid', remoteJidAlt: '5519989881838@s.whatsapp.net' }
-ERROR: { jid: '28952559136882@s.whatsapp.net', exists: false }
-```
-
-**Estratégia de fix:** Sempre que encontrar `@lid`, usar `remoteJidAlt` (`@s.whatsapp.net`) para operações de envio e verificação de número.
-
-**Arquivos a inspecionar:**
-- `src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts`
-- `src/api/services/channel.service.ts`
-- `src/api/integrations/chatbot/` — todos os services de chatbot
-
-### 4.3 Bug MÉDIO — Multi-Device: Desconexão com Android Ativo (PR #2332)
-
-Investigar desconexões quando dispositivo Android está ativo simultaneamente.
-
-### 4.4 Bug MÉDIO — findContacts (PR #2120)
-
-Aplicar se a busca de contatos não estiver funcionando.
+- **[MÉDIO]** Multi-Device: desconexão com Android ativo (PR #2332)
+- **[MÉDIO]** findContacts (PR #2120) — aplicar se a busca de contatos não funcionar
+- **[BAIXO]** `labelHandle` remove acentos dos nomes das etiquetas (`/[^\x20-\x7E]/g`), então "Não lidas" vira "No lidas"
+- **[BAIXO]** Tabela `dicuments_jean` (banco `postgres`) usa pgvector, que não existe na imagem `postgres:15`; o `pg_dumpall` falha por causa dela
 
 ---
 
 ## 5. Comandos Essenciais
 
 ```bash
-# Rebuild da imagem Docker a partir do código-fonte local (obrigatório após qualquer mudança no src/)
+# Guardar a imagem atual para rollback, rebuild e deploy (obrigatório após qualquer mudança no src/)
+docker tag evolution-api-api:latest evolution-api-api:pre-<mudanca>
 docker compose build api && docker compose up -d api
+
+# Rollback
+docker tag evolution-api-api:pre-<mudanca> evolution-api-api:latest && docker compose up -d api
+
+# Status / logs
+docker ps
+docker logs --tail 100 evolution_api
+
+# Backup do banco (use pg_dump do banco evolution; pg_dumpall falha por causa do pgvector)
+docker exec postgres pg_dump -U postgres -Fc evolution > /root/backup-pg-evolution-$(date +%F).dump
 
 # Desenvolvimento (hot reload)
 npm run dev:server
 
-# Build TypeScript (tsc --noEmit tem erro pré-existente em terminateCall — usar tsup direto)
+# Typecheck (limpo desde 2026-10) e bundle
+./node_modules/.bin/tsc --noEmit
 ./node_modules/.bin/tsup
 
 # Iniciar produção
@@ -162,13 +158,21 @@ npm run commit
 npx prisma migrate dev
 npx prisma generate
 
-# Verificar status do serviço
-pm2 status
-pm2 logs ApiEvolution --err --lines 100
-
-# Reiniciar em produção
-pm2 restart ApiEvolution
 ```
+
+### 5.1 Infraestrutura (servidor)
+
+- LXC 109 no Proxmox, IP `192.168.1.243`, Ubuntu 26.04 LTS, Docker 29. Exposto via `cloudflared`.
+- Depois de upgrade do SO/Docker: `systemctl restart docker` antes do `docker compose up` (senão aparece o erro de iptables "SKIP DNAT").
+- **O N8N (host `192.168.1.244`) usa este Redis pela LAN** (nós Redis do workflow, ex.: "Get Block"). Não ligue a porta 6379 só em `127.0.0.1`, porque isso derruba o bot.
+- O Redis não tem senha. A porta 6379 fica restrita pelo firewall `redis-guard.service` (`/etc/nftables.d/redis-guard.nft`), que libera só 127/8, 172.16/12, .243 e .244 e bloqueia IPv6. Se o IP do N8N mudar, edite o arquivo e rode `systemctl restart redis-guard`.
+
+### 5.2 Validação depois de um deploy
+
+1. `GET /instance/connectionState/<instância>` para cada instância (o `fetchInstances` lê o status do banco).
+2. Mensagens novas gravadas na tabela `Message`, tanto recebidas quanto enviadas pela API (`source = 'unknown'`).
+3. Execuções do workflow do N8N com status `success`, sem nenhuma presa em `running`.
+4. Log sem `ERROR` / `unhandledRejection`.
 
 ---
 
@@ -179,8 +183,11 @@ pm2 restart ApiEvolution
 3. Aplicar o fix — **mínimo de alterações necessárias**
 4. Build: `npm run build`
 5. Lint: `npm run lint`
-6. Commit: `npm run commit` (escolha `fix:` ou `feat:`)
-7. Reiniciar: `pm2 restart ApiEvolution`
+6. Commit: `npm run commit` (escolha `fix:` ou `feat:`). O pre-commit roda eslint + `tsc --noEmit`.
+7. Deploy: tag de rollback + `docker compose build api && docker compose up -d api` (Seção 5), depois validar (Seção 5.2)
+8. Push: `git push origin <branch>` (remote `origin` = fork `jeandgardany/evolution-api`)
+
+> Nunca commitar `.env`, `.env.bak.*` ou `venv/`.
 
 ---
 
@@ -267,37 +274,45 @@ export class MeuRecursoService {
 ## 9. Checklist de Manutenção Prioritária
 
 ### Verificação Inicial
-- [ ] `pm2 status` — checar se o serviço está rodando
-- [ ] `pm2 logs ApiEvolution --err --lines 100` — ver erros recentes
-- [ ] `cat package.json | grep baileys` — checar versão do Baileys
+- [ ] `docker ps` — checar se os containers estão rodando
+- [ ] `docker logs --tail 100 evolution_api` — ver erros recentes
+- [ ] `grep '"baileys"' package.json` — checar versão do Baileys (atual: `7.0.0-rc14`)
 - [ ] Verificar se há erros `@lid` nos logs
 
 ### Bugs para Aplicar (Por Prioridade)
-- [ ] **[CRÍTICO]** Fix loop infinito QR Code — PR #2365
-- [ ] **[CRÍTICO]** Fix LID — garantir uso de `remoteJidAlt` para envio
+- [x] **[CRÍTICO]** Fix loop infinito QR Code — PR #2365
+- [x] **[CRÍTICO]** Fix LID — uso de `remoteJidAlt`
+- [x] **[CRÍTICO]** Auth bypass entre instâncias — upstream #2435
+- [x] **[BAIXO]** Atualizar Baileys (rc14 em 2026-10-30)
 - [ ] **[MÉDIO]** Fix Multi-Device — PR #2332 se houver desconexões
 - [ ] **[MÉDIO]** Fix findContacts — PR #2120 se busca não funciona
-- [ ] **[BAIXO]** Atualizar Baileys para versão estável mais recente
 
 ---
 
 ## 10. Como Atualizar o Baileys
 
+O Baileys é MIT e pode ser atualizado no fork sem perder as correções. A licença paga é só do Evolution 2.4 do upstream, que **não** deve ser adotado.
+
 ```bash
-# Ver versão atual
-cat package.json | grep baileys
+# Ver versão atual e as disponíveis
+grep '"baileys"' package.json
+npm view baileys dist-tags
 
-# Atualizar para versão mais recente
-npm install @whiskeysockets/baileys@latest
+# Ler as release notes entre a versão atual e a nova (breaking changes)
+curl -s 'https://api.github.com/repos/WhiskeySockets/Baileys/releases?per_page=10'
 
-# OU usar o fork da EvolutionAPI (patches específicos)
-npm install github:EvolutionAPI/Baileys
-
-# Após atualizar — verificar breaking changes no build
-npm run build
-# Corrigir erros TypeScript antes de testar em produção
+# Atualizar com versão exata
+npm install baileys@<versão> --save-exact
+./node_modules/.bin/tsc --noEmit
 ```
+
+Antes de fazer deploy, verificar:
+- se o `messageTimestamp` continua `number | Long` (o código converte com `Long.isLong`; um `BigInt` quebraria os webhooks e o Prisma);
+- se o auth state em `src/utils/use-multi-file-auth-state-*.ts` aceita os novos tipos de chave;
+- fazer backup do banco (as sessões ficam nele) e guardar a imagem atual para rollback.
+
+Depois do deploy, seguir a Seção 5.2.
 
 ---
 
-*Evolution API Briefing — Jean Lima / DGGirl — Fevereiro 2026*
+*Evolution API Briefing — Jean Lima / DGGirl — Fevereiro 2026, atualizado em Outubro 2026*
