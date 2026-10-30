@@ -156,6 +156,12 @@ import { v4 } from 'uuid';
 const groupMetadataCache = new CacheService(new CacheEngine(configService, 'groups').getEngine());
 
 // Adicione a função getVideoDuration no início do arquivo
+function normalizeListType(listMessage?: proto.Message.IListMessage | null): void {
+  if (listMessage?.listType === proto.Message.ListMessage.ListType.PRODUCT_LIST) {
+    listMessage.listType = proto.Message.ListMessage.ListType.SINGLE_SELECT;
+  }
+}
+
 async function getVideoDuration(input: Buffer | string | Readable): Promise<number> {
   const MediaInfoFactory = (await import('mediainfo.js')).default;
   const mediainfo = await MediaInfoFactory({ format: 'JSON' });
@@ -236,6 +242,11 @@ export class BaileysStartupService extends ChannelStartupService {
   private readonly userDevicesCache: CacheStore = new NodeCache();
   private endSession = false;
   private logBaileys = this.configService.get<Log>('LOG').BAILEYS;
+  private lastStream515At = 0;
+
+  // After WhatsApp emits "stream:error 515" (restart required) it usually closes with `loggedOut`;
+  // that close is not a real logout, so any close inside this window still reconnects (upstream #2509).
+  private static readonly STREAM_515_RECONNECT_GRACE_MS = 30_000;
 
   public stateConnection: wa.StateConnection = { state: 'close' };
 
@@ -417,7 +428,9 @@ export class BaileysStartupService extends ChannelStartupService {
       }
 
       const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406];
-      const shouldReconnect = !codesToNotReconnect.includes(statusCode);
+      const recentStream515 = Date.now() - this.lastStream515At < BaileysStartupService.STREAM_515_RECONNECT_GRACE_MS;
+      const shouldReconnect =
+        !codesToNotReconnect.includes(statusCode) || (statusCode === DisconnectReason.loggedOut && recentStream515);
       if (shouldReconnect) {
         await this.connectToWhatsapp(this.phoneNumber);
       } else {
@@ -669,19 +682,9 @@ export class BaileysStartupService extends ChannelStartupService {
       userDevicesCache: this.userDevicesCache,
       transactionOpts: { maxCommitRetries: 10, delayBetweenTriesMs: 3000 },
       patchMessageBeforeSending(message) {
-        if (
-          message.deviceSentMessage?.message?.listMessage?.listType === proto.Message.ListMessage.ListType.PRODUCT_LIST
-        ) {
-          message = JSON.parse(JSON.stringify(message));
-
-          message.deviceSentMessage.message.listMessage.listType = proto.Message.ListMessage.ListType.SINGLE_SELECT;
-        }
-
-        if (message.listMessage?.listType == proto.Message.ListMessage.ListType.PRODUCT_LIST) {
-          message = JSON.parse(JSON.stringify(message));
-
-          message.listMessage.listType = proto.Message.ListMessage.ListType.SINGLE_SELECT;
-        }
+        // Mutate in place: a JSON round-trip strips protobuf Long prototypes and breaks encoding (upstream #2461)
+        normalizeListType(message.deviceSentMessage?.message?.listMessage);
+        normalizeListType(message.listMessage);
 
         return message;
       },
@@ -690,6 +693,12 @@ export class BaileysStartupService extends ChannelStartupService {
     this.endSession = false;
 
     this.client = makeWASocket(socketConfig);
+
+    this.client.ws.on('CB:stream:error', (node: { attrs?: { code?: string | number } }) => {
+      if (String(node?.attrs?.code) === '515') {
+        this.lastStream515At = Date.now();
+      }
+    });
 
     this.eventHandler();
 
@@ -2082,7 +2091,7 @@ export class BaileysStartupService extends ChannelStartupService {
   ) {
     const isWA = (await this.whatsappNumber({ numbers: [number] }))?.shift();
 
-    if (!isWA.exists && !isJidGroup(isWA.jid) && !isWA.jid.includes('@broadcast')) {
+    if (!isWA.exists && !isJidGroup(isWA.jid) && !isWA.jid.includes('@broadcast') && !isWA.jid.includes('@lid')) {
       throw new BadRequestException(isWA);
     }
 
@@ -2157,7 +2166,7 @@ export class BaileysStartupService extends ChannelStartupService {
           throw new NotFoundException('Group not found');
         }
 
-        if (options?.mentionsEveryOne) {
+        if (options?.mentionsEveryOne === true) {
           mentions = group.participants.map((participant) => participant.id);
         } else if (options.mentioned?.length) {
           mentions = options.mentioned.map((mention) => {
@@ -2324,7 +2333,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
       const isWA = (await this.whatsappNumber({ numbers: [number] }))?.shift();
 
-      if (!isWA.exists && !isJidGroup(isWA.jid) && !isWA.jid.includes('@broadcast')) {
+      if (!isWA.exists && !isJidGroup(isWA.jid) && !isWA.jid.includes('@broadcast') && !isWA.jid.includes('@lid')) {
         throw new BadRequestException(isWA);
       }
 
@@ -2938,7 +2947,7 @@ export class BaileysStartupService extends ChannelStartupService {
             ptt: true,
             mimetype: 'audio/ogg; codecs=opus',
           },
-          { presence: 'recording', delay: data?.delay },
+          { presence: 'recording', delay: data?.delay, quoted: data?.quoted },
           isIntegration,
         );
 
@@ -2955,7 +2964,7 @@ export class BaileysStartupService extends ChannelStartupService {
         ptt: true,
         mimetype: 'audio/ogg; codecs=opus',
       },
-      { presence: 'recording', delay: data?.delay },
+      { presence: 'recording', delay: data?.delay, quoted: data?.quoted },
       isIntegration,
     );
   }
