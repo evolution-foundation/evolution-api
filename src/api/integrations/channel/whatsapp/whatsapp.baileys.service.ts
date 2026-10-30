@@ -4275,9 +4275,10 @@ export class BaileysStartupService extends ChannelStartupService {
         message: response,
       };
     } catch (error) {
+      this.logger.error(error);
       throw new InternalServerErrorException({
         limitSharing: false,
-        message: ['An error occurred while updating advanced chat privacy.', error.toString()],
+        message: ['Ocorreu um erro ao atualizar a privacidade avançada da conversa.'],
       });
     }
   }

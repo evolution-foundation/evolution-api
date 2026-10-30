@@ -107,6 +107,17 @@ export class ChatRouter extends RouterBroker {
 
         return res.status(HttpStatus.CREATED).json(response);
       })
+      /**
+       * @route POST /chat/updateLimitSharing/:instanceName
+       * @description Enable or disable WhatsApp Advanced Chat Privacy for a chat or group.
+       * @param {string} instanceName - Name of the WhatsApp instance.
+       * @body {LimitSharingDto} data - Non-empty chat identifier and required boolean limitSharing toggle.
+       * @returns {201} Chat ID, requested limitSharing state, and the Baileys message response.
+       * @throws {400} Invalid request body.
+       * @throws {401} Unauthorized request.
+       * @throws {404} Instance not found.
+       * @throws {500} Failed to update advanced chat privacy.
+       */
       .post(this.routerPath('updateLimitSharing'), ...guards, async (req, res) => {
         const response = await this.dataValidate<LimitSharingDto>({
           request: req,
