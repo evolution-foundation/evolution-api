@@ -182,7 +182,7 @@ export default async function useMultiFileAuthStatePrisma(
             ids.map(async (id) => {
               let value = await readData(`${type}-${id}`);
               if (type === 'app-state-sync-key' && value) {
-                value = proto.Message.AppStateSyncKeyData.create(value);
+                value = proto.Message.AppStateSyncKeyData.fromObject(value);
               }
 
               data[id] = value;

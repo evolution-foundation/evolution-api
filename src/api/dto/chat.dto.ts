@@ -24,6 +24,8 @@ export class getBase64FromMediaMessageDto {
 
 export class WhatsAppNumberDto {
   numbers: string[];
+  /** Opt-in: add each confirmed number's WhatsApp LID (`<digits>@lid` or null) to the response. */
+  includeLid?: boolean;
 }
 
 export class NumberDto {
@@ -65,9 +67,17 @@ class Key {
   id: string;
   fromMe: boolean;
   remoteJid: string;
+  /**
+   * Group receipts address the sender, not the chat: Baileys aggregates read
+   * receipts by `remoteJid:participant` and rejects a markRead range whose
+   * not-from-me group key has no participant. Round-trip whatever the provider
+   * gave us in the original key.
+   */
+  participant?: string;
 }
 export class ReadMessageDto {
   readMessages: Key[];
+  lastMessage?: { key: Key; messageTimestamp: number };
 }
 
 export class LastMessage {

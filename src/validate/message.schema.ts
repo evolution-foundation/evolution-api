@@ -65,6 +65,17 @@ export const offerCallSchema: JSONSchema7 = {
   required: ['number', 'callDuration'],
 };
 
+export const forwardMessageSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    number: { ...numberDefinition },
+    messageId: { type: 'string' },
+  },
+  required: ['number', 'messageId'],
+  ...isNotEmpty('number', 'messageId'),
+};
+
 export const textMessageSchema: JSONSchema7 = {
   $id: v4(),
   type: 'object',

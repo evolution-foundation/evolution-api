@@ -38,6 +38,10 @@ export const whatsappNumberSchema: JSONSchema7 = {
         description: '"numbers" must be an array of numeric strings',
       },
     },
+    includeLid: {
+      type: 'boolean',
+      description: '"includeLid" must be a boolean',
+    },
   },
 };
 
@@ -47,20 +51,38 @@ export const readMessageSchema: JSONSchema7 = {
   properties: {
     readMessages: {
       type: 'array',
-      minItems: 1,
       uniqueItems: true,
       items: {
         properties: {
           id: { type: 'string' },
           fromMe: { type: 'boolean', enum: [true, false] },
           remoteJid: { type: 'string' },
+          participant: { type: 'string', minLength: 1 },
         },
         required: ['id', 'fromMe', 'remoteJid'],
         ...isNotEmpty('id', 'remoteJid'),
       },
     },
+    lastMessage: {
+      type: 'object',
+      properties: {
+        key: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', minLength: 1 },
+            fromMe: { type: 'boolean' },
+            remoteJid: { type: 'string', minLength: 1 },
+            participant: { type: 'string', minLength: 1 },
+          },
+          required: ['id', 'fromMe', 'remoteJid'],
+        },
+        messageTimestamp: { type: 'integer', minimum: 1 },
+      },
+      required: ['key', 'messageTimestamp'],
+    },
   },
   required: ['readMessages'],
+  anyOf: [{ properties: { readMessages: { minItems: 1 } } }, { required: ['lastMessage'] }],
 };
 
 export const archiveChatSchema: JSONSchema7 = {
@@ -109,7 +131,7 @@ export const markChatUnreadSchema: JSONSchema7 = {
           required: ['id', 'fromMe', 'remoteJid'],
           ...isNotEmpty('id', 'remoteJid'),
         },
-        messageTimestamp: { type: 'integer', minLength: 1 },
+        messageTimestamp: { type: 'integer', minimum: 1 },
       },
       required: ['key'],
       ...isNotEmpty('messageTimestamp'),
