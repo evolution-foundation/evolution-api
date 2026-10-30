@@ -17,6 +17,8 @@ type DataValidate<T> = {
 
 const logger = new Logger('Validate');
 
+const PROTECTED_INSTANCE_FIELDS = ['instanceName', 'instanceId'] as const;
+
 export abstract class RouterBroker {
   constructor() {}
   public routerPath(path: string, param = true) {
@@ -34,7 +36,18 @@ export abstract class RouterBroker {
     const instance = request.params as unknown as InstanceDto;
 
     if (request?.query && Object.keys(request.query).length > 0) {
-      Object.assign(instance, request.query);
+      // Security (upstream #2435): the auth guard validated the instance from the path,
+      // so the query string must not be able to swap it for another tenant's instance.
+      const query = { ...(request.query as Record<string, any>) };
+      if (request.params?.instanceName) {
+        for (const field of PROTECTED_INSTANCE_FIELDS) {
+          if (field in query) {
+            logger.warn(`Ignoring attempt to override protected field "${field}" via query string`);
+            delete query[field];
+          }
+        }
+      }
+      Object.assign(instance, query);
     }
 
     if (request.originalUrl.includes('/instance/create')) {
