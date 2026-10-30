@@ -1518,18 +1518,13 @@ export class BaileysStartupService extends ChannelStartupService {
           });
 
           if (existingChat) {
-            const chatToInsert = {
-              remoteJid: message.remoteJid,
-              instanceId: this.instanceId,
-              name: message.pushName || '',
-              unreadMessages: 0,
-            };
+            // The chat already exists: update it instead of creating a duplicate, which always hit the
+            // (instanceId, remoteJid) unique constraint. Name is left untouched so status updates can't blank it.
+            const chatToUpdate = { remoteJid: message.remoteJid, instanceId: this.instanceId, unreadMessages: 0 };
 
-            this.sendDataWebhook(Events.CHATS_UPSERT, [chatToInsert]);
+            this.sendDataWebhook(Events.CHATS_UPSERT, [chatToUpdate]);
             if (this.configService.get<Database>('DATABASE').SAVE_DATA.CHATS) {
-              await this.prismaRepository.chat.create({
-                data: chatToInsert,
-              });
+              await this.prismaRepository.chat.update({ where: { id: existingChat.id }, data: chatToUpdate });
             }
           }
         }
