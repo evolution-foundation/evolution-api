@@ -25,7 +25,7 @@ services:
         max-file: "3"
 
   redis:
-    image: redis:latest
+    image: redis:8.4.0
     networks:
       - evolution-net
     container_name: redis
@@ -34,7 +34,7 @@ services:
     volumes:
       - evolution_redis:/data
     ports:
-      - 6379:6379
+      - 127.0.0.1:6379:6379
     restart: always
     logging:
       driver: json-file
