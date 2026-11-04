@@ -3980,7 +3980,7 @@ export class BaileysStartupService extends ChannelStartupService {
     });
 
     if (!stored) {
-      throw new NotFoundException('Message not found');
+      throw new NotFoundException('Mensagem não encontrada');
     }
 
     const storedKey = stored.key as proto.IMessageKey & { remoteJidAlt?: string; participantAlt?: string };
@@ -3991,12 +3991,12 @@ export class BaileysStartupService extends ChannelStartupService {
       requestedJid !== jidNormalizedUser(storedKey.remoteJid) &&
       requestedJid !== jidNormalizedUser(storedKey.remoteJidAlt || '')
     ) {
-      throw new BadRequestException('remoteJid does not match the message');
+      throw new BadRequestException('O remoteJid não corresponde à mensagem');
     }
 
     const messageType = messageTypes.find((type) => storedMessage?.[type]);
     if (!messageType) {
-      throw new BadRequestException(`Message is not a ${messageTypes.join(' or ')}`);
+      throw new BadRequestException(`A mensagem não é do tipo ${messageTypes.join(' ou ')}`);
     }
 
     let secret: any = storedMessage?.messageContextInfo?.messageSecret;
@@ -4008,7 +4008,7 @@ export class BaileysStartupService extends ChannelStartupService {
       secret = Buffer.from(Object.values(secret) as number[]);
     }
     if (!Buffer.isBuffer(secret) || secret.length !== 32) {
-      throw new BadRequestException('messageSecret not available for this message');
+      throw new BadRequestException('messageSecret não disponível para esta mensagem');
     }
 
     const ownLid = this.client.user?.lid ? jidNormalizedUser(this.client.user.lid) : undefined;
@@ -4088,7 +4088,7 @@ export class BaileysStartupService extends ChannelStartupService {
     const unknownOptions = (data.options || []).filter((option) => !optionNames.includes(option));
     if (unknownOptions.length) {
       throw new BadRequestException({
-        error: 'Unknown poll option(s)',
+        error: 'Opção(ões) de enquete desconhecida(s)',
         unknown: unknownOptions,
         available: optionNames,
       });
@@ -4096,7 +4096,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
     const selectableCount = poll.selectableOptionsCount || 0;
     if (selectableCount && data.options.length > selectableCount) {
-      throw new BadRequestException(`A maximum of ${selectableCount} option(s) can be selected`);
+      throw new BadRequestException(`É possível selecionar no máximo ${selectableCount} opção(ões)`);
     }
 
     const plaintext = proto.Message.PollVoteMessage.encode({
@@ -4138,7 +4138,7 @@ export class BaileysStartupService extends ChannelStartupService {
       };
     } catch (error) {
       this.logger.error(`Failed to send poll vote: ${error?.message || error}`);
-      throw new BadRequestException('Failed to send poll vote', error?.message);
+      throw new BadRequestException('Falha ao enviar o voto na enquete', error?.message);
     }
   }
 
@@ -4190,7 +4190,7 @@ export class BaileysStartupService extends ChannelStartupService {
       };
     } catch (error) {
       this.logger.error(`Failed to send event response: ${error?.message || error}`);
-      throw new BadRequestException('Failed to send event response', error?.message);
+      throw new BadRequestException('Falha ao enviar a resposta ao evento', error?.message);
     }
   }
 

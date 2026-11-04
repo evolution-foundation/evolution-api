@@ -782,10 +782,10 @@ export class EvolutionStartupService extends ChannelStartupService {
     throw new BadRequestException('Method not available on Evolution Channel');
   }
   public async pollVoteMessage() {
-    throw new BadRequestException('Method not available on Evolution Channel');
+    throw new BadRequestException('Método não disponível no Evolution Channel');
   }
   public async eventResponseMessage() {
-    throw new BadRequestException('Method not available on Evolution Channel');
+    throw new BadRequestException('Método não disponível no Evolution Channel');
   }
   public async statusMessage() {
     throw new BadRequestException('Method not available on Evolution Channel');
