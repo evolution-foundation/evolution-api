@@ -44,10 +44,12 @@ import {
   SendButtonsDto,
   SendCarouselDto,
   SendContactDto,
+  SendEventResponseDto,
   SendListDto,
   SendLocationDto,
   SendMediaDto,
   SendPollDto,
+  SendPollVoteDto,
   SendPtvDto,
   SendReactionDto,
   SendStatusDto,
@@ -139,7 +141,7 @@ import { Label } from 'baileys/lib/Types/Label';
 import { LabelAssociation } from 'baileys/lib/Types/LabelAssociation';
 import { spawn } from 'child_process';
 import { isArray, isBase64, isURL } from 'class-validator';
-import { createHash } from 'crypto';
+import { createCipheriv, createHash, createHmac, randomBytes } from 'crypto';
 import EventEmitter2 from 'eventemitter2';
 import ffmpeg from 'fluent-ffmpeg';
 import FormData from 'form-data';
@@ -3959,6 +3961,237 @@ export class BaileysStartupService extends ChannelStartupService {
     }
 
     return await this.sendMessageWithTyping(data.number, { ...message }, {});
+  }
+
+  /**
+   * Loads a poll/event creation message from the database together with its messageSecret and resolves the JIDs
+   * used for the message-secret encryption (see Baileys decryptPollVote / whatsmeow encryptMsgSecret).
+   *
+   * WhatsApp clients derive the key from the creator and sender in the LID domain when the chat uses LID
+   * addressing; for messages sent by this account (including the self-chat) the own LID is used.
+   */
+  private async getMessageSecretContext(
+    key: proto.IMessageKey,
+    messageTypes: string[],
+    jidMode: 'auto' | 'lid' | 'pn' = 'auto',
+  ) {
+    const stored = await this.prismaRepository.message.findFirst({
+      where: { instanceId: this.instanceId, key: { path: ['id'], equals: key.id } },
+    });
+
+    if (!stored) {
+      throw new NotFoundException('Mensagem não encontrada');
+    }
+
+    const storedKey = stored.key as proto.IMessageKey & { remoteJidAlt?: string; participantAlt?: string };
+    const storedMessage = stored.message as Record<string, any>;
+    const requestedJid = jidNormalizedUser(key.remoteJid);
+
+    if (
+      requestedJid !== jidNormalizedUser(storedKey.remoteJid) &&
+      requestedJid !== jidNormalizedUser(storedKey.remoteJidAlt || '')
+    ) {
+      throw new BadRequestException('O remoteJid não corresponde à mensagem');
+    }
+
+    const messageType = messageTypes.find((type) => storedMessage?.[type]);
+    if (!messageType) {
+      throw new BadRequestException(`A mensagem não é do tipo ${messageTypes.join(' ou ')}`);
+    }
+
+    let secret: any = storedMessage?.messageContextInfo?.messageSecret;
+    if (typeof secret === 'string') {
+      secret = Buffer.from(secret, 'base64');
+    } else if (secret?.type === 'Buffer' && Array.isArray(secret.data)) {
+      secret = Buffer.from(secret.data);
+    } else if (secret && !Buffer.isBuffer(secret)) {
+      secret = Buffer.from(Object.values(secret) as number[]);
+    }
+    if (!Buffer.isBuffer(secret) || secret.length !== 32) {
+      throw new BadRequestException('messageSecret não disponível para esta mensagem');
+    }
+
+    const ownLid = this.client.user?.lid ? jidNormalizedUser(this.client.user.lid) : undefined;
+    const ownPn = jidNormalizedUser(this.client.user?.id || this.instance.wuid);
+    const isGroup = isJidGroup(storedKey.remoteJid);
+    const author = storedKey.fromMe ? undefined : isGroup ? storedKey.participant : storedKey.remoteJid;
+
+    let useLid = storedKey.fromMe ? !!ownLid : String(author || '').endsWith('@lid');
+    if (jidMode === 'lid') useLid = !!ownLid;
+    if (jidMode === 'pn') useLid = false;
+
+    let creatorJid: string;
+    let senderJid: string;
+    if (useLid) {
+      senderJid = ownLid;
+      creatorJid = storedKey.fromMe ? ownLid : jidNormalizedUser(author);
+    } else {
+      senderJid = ownPn;
+      const authorPn = String(author || '').endsWith('@lid')
+        ? storedKey.participantAlt || storedKey.remoteJidAlt || author
+        : author;
+      creatorJid = storedKey.fromMe ? ownPn : jidNormalizedUser(authorPn);
+    }
+
+    // Mirror the primary device: in LID-addressed chats (including the self-chat) both the creation key and the
+    // relay target use the LID chat JID.
+    let keyRemoteJid = storedKey.remoteJid;
+    if (useLid && !isGroup && jidNormalizedUser(storedKey.remoteJid) === ownPn) {
+      keyRemoteJid = ownLid;
+    } else if (useLid && !isGroup && storedKey.remoteJidAlt?.endsWith('@lid')) {
+      keyRemoteJid = storedKey.remoteJidAlt;
+    }
+
+    const creationKey: proto.IMessageKey = { remoteJid: keyRemoteJid, fromMe: !!storedKey.fromMe, id: storedKey.id };
+    if (isGroup && storedKey.participant) {
+      creationKey.participant = storedKey.participant;
+    }
+
+    return { storedKey, storedMessage, messageType, secret: secret as Buffer, creatorJid, senderJid, creationKey };
+  }
+
+  private encryptMessageSecretPayload(
+    secret: Buffer,
+    messageId: string,
+    creatorJid: string,
+    senderJid: string,
+    useCase: 'Poll Vote' | 'Event Response',
+    plaintext: Uint8Array,
+  ) {
+    const useCaseSecret = Buffer.concat([
+      Buffer.from(messageId),
+      Buffer.from(creatorJid),
+      Buffer.from(senderJid),
+      Buffer.from(useCase),
+      Buffer.from([1]),
+    ]);
+    const baseKey = createHmac('sha256', Buffer.alloc(32)).update(secret).digest();
+    const encKey = createHmac('sha256', baseKey).update(useCaseSecret).digest();
+    const encIv = randomBytes(12);
+
+    const cipher = createCipheriv('aes-256-gcm', encKey, encIv);
+    cipher.setAAD(Buffer.from(`${messageId}\u0000${senderJid}`));
+    const encPayload = Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]);
+
+    return { encPayload, encIv };
+  }
+
+  public async pollVoteMessage(data: SendPollVoteDto) {
+    const context = await this.getMessageSecretContext(
+      data.key,
+      ['pollCreationMessage', 'pollCreationMessageV2', 'pollCreationMessageV3'],
+      data.jidMode,
+    );
+
+    const poll = context.storedMessage[context.messageType];
+    const optionNames: string[] = (poll.options || []).map((option: any) => option.optionName);
+    const unknownOptions = (data.options || []).filter((option) => !optionNames.includes(option));
+    if (unknownOptions.length) {
+      throw new BadRequestException({
+        error: 'Opção(ões) de enquete desconhecida(s)',
+        unknown: unknownOptions,
+        available: optionNames,
+      });
+    }
+
+    const selectableCount = poll.selectableOptionsCount || 0;
+    if (selectableCount && data.options.length > selectableCount) {
+      throw new BadRequestException(`É possível selecionar no máximo ${selectableCount} opção(ões)`);
+    }
+
+    const plaintext = proto.Message.PollVoteMessage.encode({
+      selectedOptions: data.options.map((option) => createHash('sha256').update(option).digest()),
+    }).finish();
+    const vote = this.encryptMessageSecretPayload(
+      context.secret,
+      context.storedKey.id,
+      context.creatorJid,
+      context.senderJid,
+      'Poll Vote',
+      plaintext,
+    );
+
+    const message: proto.IMessage = {
+      pollUpdateMessage: {
+        pollCreationMessageKey: context.creationKey,
+        vote,
+        metadata: {},
+        senderTimestampMs: Date.now(),
+      },
+    };
+
+    try {
+      const messageId = await this.client.relayMessage(context.creationKey.remoteJid, message, {
+        additionalAttributes: { type: 'poll' },
+        // Same markers as a vote sent by the phone; without content_type the server acks but does not deliver the vote.
+        additionalNodes: [{ tag: 'meta', attrs: { polltype: 'vote', content_type: 'add_on' } }],
+      });
+
+      this.logger.verbose(`Poll vote sent for poll ${context.storedKey.id}`);
+
+      return {
+        status: 'SENT',
+        voteMessageId: messageId,
+        poll: { id: context.storedKey.id, remoteJid: context.storedKey.remoteJid },
+        options: data.options,
+        crypto: { creator: context.creatorJid, voter: context.senderJid, keyRemoteJid: context.creationKey.remoteJid },
+      };
+    } catch (error) {
+      this.logger.error(`Failed to send poll vote: ${error?.message || error}`);
+      throw new BadRequestException('Falha ao enviar o voto na enquete', error?.message);
+    }
+  }
+
+  public async eventResponseMessage(data: SendEventResponseDto) {
+    const context = await this.getMessageSecretContext(data.key, ['eventMessage'], data.jidMode);
+
+    const responseTypes = {
+      going: proto.Message.EventResponseMessage.EventResponseType.GOING,
+      not_going: proto.Message.EventResponseMessage.EventResponseType.NOT_GOING,
+      maybe: proto.Message.EventResponseMessage.EventResponseType.MAYBE,
+    };
+
+    const plaintext = proto.Message.EventResponseMessage.encode({
+      response: responseTypes[data.response],
+      timestampMs: Date.now(),
+      extraGuestCount: data.extraGuestCount || 0,
+    }).finish();
+    const encrypted = this.encryptMessageSecretPayload(
+      context.secret,
+      context.storedKey.id,
+      context.creatorJid,
+      context.senderJid,
+      'Event Response',
+      plaintext,
+    );
+
+    const message: proto.IMessage = {
+      encEventResponseMessage: { eventCreationMessageKey: context.creationKey, ...encrypted },
+    };
+
+    try {
+      const messageId = await this.client.relayMessage(context.creationKey.remoteJid, message, {
+        additionalAttributes: { type: 'event' },
+        additionalNodes: [{ tag: 'meta', attrs: { event_type: 'response' } }],
+      });
+
+      this.logger.verbose(`Event response sent for event ${context.storedKey.id}`);
+
+      return {
+        status: 'SENT',
+        responseMessageId: messageId,
+        event: { id: context.storedKey.id, remoteJid: context.storedKey.remoteJid },
+        response: data.response,
+        crypto: {
+          creator: context.creatorJid,
+          responder: context.senderJid,
+          keyRemoteJid: context.creationKey.remoteJid,
+        },
+      };
+    } catch (error) {
+      this.logger.error(`Failed to send event response: ${error?.message || error}`);
+      throw new BadRequestException('Falha ao enviar a resposta ao evento', error?.message);
+    }
   }
 
   public async reactionMessage(data: SendReactionDto) {

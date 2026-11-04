@@ -4,10 +4,12 @@ import {
   SendButtonsDto,
   SendCarouselDto,
   SendContactDto,
+  SendEventResponseDto,
   SendListDto,
   SendLocationDto,
   SendMediaDto,
   SendPollDto,
+  SendPollVoteDto,
   SendPtvDto,
   SendReactionDto,
   SendStatusDto,
@@ -93,6 +95,14 @@ export class SendMessageController {
 
   public async sendContact({ instanceName }: InstanceDto, data: SendContactDto) {
     return await this.waMonitor.waInstances[instanceName].contactMessage(data);
+  }
+
+  public async sendPollVote({ instanceName }: InstanceDto, data: SendPollVoteDto) {
+    return await this.waMonitor.waInstances[instanceName].pollVoteMessage(data);
+  }
+
+  public async sendEventResponse({ instanceName }: InstanceDto, data: SendEventResponseDto) {
+    return await this.waMonitor.waInstances[instanceName].eventResponseMessage(data);
   }
 
   public async sendReaction({ instanceName }: InstanceDto, data: SendReactionDto) {
