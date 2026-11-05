@@ -1,19 +1,26 @@
 # evolution-in-purple
 
-## Unreleased
+## 0.1.4 (2026-11-05)
 
 ### Fixes
 
-* **Sent message status**: messages sent by the instance now advance `Message.status` from WhatsApp acks instead of staying `PENDING`, so `findChats` `lastMessageStatus` and `findMessages` reflect the real status. Applies to 1:1 chats; Baileys delivers no per-message status for groups. Backward acks are ignored and `DELETED`/`EDITED` are never overwritten
-* **QR code limit**: unpaired instances whose QR code limit is reached now end in `close` (memory and database) instead of staying `connecting`, so requesting the QR code again starts a fresh connection
-* **Deleted messages resent on retry**: messages deleted for everyone are no longer resent when a device sends a retry receipt, so deleted content no longer reappears. Incoming revokes now mark the stored message `DELETED` and record a `DELETED` message update; the `MESSAGES_DELETE` webhook payload is unchanged
-* **Instance-scoped chat and edit lookups**: recalculating a chat's unread count and editing a sent message now only look up rows of the current instance, so another instance's chat or message with the same `remoteJid` or message id is no longer updated
-* **Payload logging**: the Baileys channel no longer writes full message payloads (including media base64) to stdout on every received message, message update, call or history sync; these logs now go through the logger at `VERBOSE`/`DEBUG` level and include only ids and counts. Webhook payloads are unchanged
-* **Event error isolation**: a failure while processing one message of a `messages.upsert` or `messages.update` batch no longer drops the rest of the batch and their webhooks, and a failing or ignored event type (for example a group `presence.update` with `groupsIgnore`, or a label event) no longer skips the other event types delivered with it. Webhook payloads and event order are unchanged
+* **Sent message status**: messages sent by the instance now advance `Message.status` from WhatsApp acks instead of staying `PENDING`, so `findChats` `lastMessageStatus` and `findMessages` reflect the real status. Applies to 1:1 chats; Baileys delivers no per-message status for groups. Backward acks are ignored and `DELETED`/`EDITED` are never overwritten (#36)
+* **QR code limit**: unpaired instances whose QR code limit is reached now end in `close` (memory and database) instead of staying `connecting`, so requesting the QR code again starts a fresh connection (#37)
+* **Deleted messages resent on retry**: messages deleted for everyone are no longer resent when a device sends a retry receipt, so deleted content no longer reappears. Incoming revokes now mark the stored message `DELETED` and record a `DELETED` message update; the `MESSAGES_DELETE` webhook payload is unchanged (#38)
+* **Instance-scoped chat and edit lookups**: recalculating a chat's unread count and editing a sent message now only look up rows of the current instance, so another instance's chat or message with the same `remoteJid` or message id is no longer updated (#39)
+* **Payload logging**: the Baileys channel no longer writes full message payloads (including media base64) to stdout on every received message, message update, call or history sync; these logs now go through the logger at `VERBOSE`/`DEBUG` level and include only ids and counts. Webhook payloads are unchanged (#41)
+* **Event error isolation**: a failure while processing one message of a `messages.upsert` or `messages.update` batch no longer drops the rest of the batch and their webhooks, and a failing or ignored event type (for example a group `presence.update` with `groupsIgnore`, or a label event) no longer skips the other event types delivered with it. Webhook payloads and event order are unchanged (#42)
+* **`@lid` remoteJidAlt**: history sync messages from `@lid` chats now store `key.remoteJidAlt`, and it is backfilled on stored messages when a lid mapping is learned; payload contacts with conflicting lids are skipped (#33, #34)
+* **Archive and mark unread**: `archiveChat` and `markChatUnread` no longer fail with 500 when only `chat` is sent: the last message is looked up by JSON path on the jid built from the number, chats without stored messages can be archived, and the fallback timestamp is in seconds. Response shapes are unchanged (#43; based on the fix by Razario)
 
 ### Performance
 
-* **Message lookup indexes**: PostgreSQL migrations add `idx_message_instance_key_id` (`instanceId`, `key->>'id'`) and `idx_message_instance_remotejid_fromme` (`instanceId`, `key->>'remoteJid'`, `key->>'fromMe'`) so message updates and read receipts no longer scan every message of the instance. They are created `IF NOT EXISTS` inside the migration transaction, which runs before the server starts, so databases that already have them are left untouched and a failed build leaves no invalid index
+* **Message lookup indexes**: PostgreSQL migrations add `idx_message_instance_key_id` (`instanceId`, `key->>'id'`) and `idx_message_instance_remotejid_fromme` (`instanceId`, `key->>'remoteJid'`, `key->>'fromMe'`) so message updates and read receipts no longer scan every message of the instance. They are created `IF NOT EXISTS` inside the migration transaction, which runs before the server starts, so databases that already have them are left untouched and a failed build leaves no invalid index (#40)
+
+### Chores
+
+* `scripts/` adds a one-off, row-locking backfill for `@lid` `key.remoteJidAlt` with backup and rollback (#35)
+* The daily image scan fails on fixable CRITICAL or HIGH findings (#32)
 
 ## 0.1.3 (2026-10-24)
 
