@@ -52,8 +52,10 @@ export abstract class RouterBroker {
       Object.assign(instance, sanitizeUntrustedInput(request.query as Record<string, any>));
     }
 
+    // Create has no :instanceName in the path and only passes the guard with the
+    // global key, so the body is where the new instance's name legitimately comes from.
     if (request.originalUrl.includes('/instance/create')) {
-      Object.assign(instance, sanitizeUntrustedInput(body));
+      Object.assign(instance, body);
     }
 
     Object.assign(ref, body);
