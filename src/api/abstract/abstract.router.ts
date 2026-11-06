@@ -17,6 +17,21 @@ type DataValidate<T> = {
 
 const logger = new Logger('Validate');
 
+const PROTECTED_INSTANCE_FIELDS = ['instanceName', 'instanceId'] as const;
+
+function sanitizeUntrustedInput(source: Record<string, any> | undefined): Record<string, any> {
+  if (!source || typeof source !== 'object') return {};
+  const sanitized: Record<string, any> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if ((PROTECTED_INSTANCE_FIELDS as readonly string[]).includes(key)) {
+      logger.warn(`Ignoring attempt to override protected field "${key}" via untrusted input`);
+      continue;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
+}
+
 export abstract class RouterBroker {
   constructor() {}
   public routerPath(path: string, param = true) {
@@ -34,11 +49,11 @@ export abstract class RouterBroker {
     const instance = request.params as unknown as InstanceDto;
 
     if (request?.query && Object.keys(request.query).length > 0) {
-      Object.assign(instance, request.query);
+      Object.assign(instance, sanitizeUntrustedInput(request.query as Record<string, any>));
     }
 
     if (request.originalUrl.includes('/instance/create')) {
-      Object.assign(instance, body);
+      Object.assign(instance, sanitizeUntrustedInput(body));
     }
 
     Object.assign(ref, body);
