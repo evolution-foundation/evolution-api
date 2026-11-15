@@ -38,6 +38,7 @@ import {
   CarouselCard,
   ContactMessage,
   KeyType,
+  LinkPreviewCard,
   MediaMessage,
   Options,
   SendAudioDto,
@@ -2422,6 +2423,51 @@ export class BaileysStartupService extends ChannelStartupService {
     }
   }
 
+  /**
+   * Builds the link preview from a card given in the request (title, description and picture) instead of from the
+   * page of the link. Baileys uses an object in `linkPreview` as the preview info of the message.
+   */
+  private async buildCustomLinkPreview(card: LinkPreviewCard, text: string) {
+    const url = text.match(/https?:\/\/[^\s]+/)?.[0]?.replace(/[.,);\]]+$/u, '');
+    if (!url) return undefined;
+
+    const info: any = {
+      'canonical-url': card.canonicalUrl || url,
+      'matched-text': url,
+      title: card.title,
+      description: card.description,
+    };
+
+    try {
+      let image: Buffer | undefined;
+      if (card.thumbnailBase64) {
+        image = Buffer.from(card.thumbnailBase64.replace(/^data:[^;]+;base64,/, ''), 'base64');
+      } else if (card.thumbnailUrl) {
+        const response = await axios.get(card.thumbnailUrl, {
+          responseType: 'arraybuffer',
+          timeout: 10000,
+          maxContentLength: 5 * 1024 * 1024,
+        });
+        image = Buffer.from(response.data);
+      }
+
+      if (image?.length) {
+        // Same upload Baileys does for the preview it builds itself: a high quality thumbnail of the link
+        const { imageMessage } = await prepareWAMessageMedia({ image }, {
+          upload: this.client.waUploadToServer,
+          mediaTypeOverride: 'thumbnail-link',
+        } as any);
+        info.jpegThumbnail = imageMessage?.jpegThumbnail ? Buffer.from(imageMessage.jpegThumbnail) : undefined;
+        info.highQualityThumbnail = imageMessage || undefined;
+      }
+    } catch (error) {
+      // The card is still sent, just without its picture
+      this.logger.error(`Error preparing the link preview picture: ${error}`);
+    }
+
+    return info;
+  }
+
   private async sendMessage(
     sender: string,
     message: any,
@@ -2638,10 +2684,15 @@ export class BaileysStartupService extends ChannelStartupService {
         }
       }
 
-      const linkPreview = options?.linkPreview === false ? false : undefined;
+      // linkPreview can be false (no preview), true/undefined (preview built from the page) or a custom card
+      const customCard =
+        options?.linkPreview && typeof options.linkPreview === 'object' ? options.linkPreview : undefined;
+      let linkPreview: any = options?.linkPreview === false ? false : undefined;
 
       let previewContext: any = undefined;
-      if (linkPreview !== false && (message as any)?.conversation) {
+      if (customCard && (message as any)?.conversation) {
+        linkPreview = await this.buildCustomLinkPreview(customCard, (message as any).conversation);
+      } else if (linkPreview !== false && (message as any)?.conversation) {
         previewContext = await this.generateLinkPreview((message as any).conversation);
       }
 
