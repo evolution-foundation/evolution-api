@@ -5,11 +5,21 @@ export class Quoted {
   message: proto.IMessage;
 }
 
+export class LinkPreviewCard {
+  title: string;
+  description?: string;
+  // picture of the card: a url or a base64 string (jpeg/png)
+  thumbnailUrl?: string;
+  thumbnailBase64?: string;
+  // shown as the card's address; defaults to the first link in the text
+  canonicalUrl?: string;
+}
+
 export class Options {
   delay?: number;
   presence?: WAPresence;
   quoted?: Quoted;
-  linkPreview?: boolean;
+  linkPreview?: boolean | LinkPreviewCard;
   encoding?: boolean;
   mentionsEveryOne?: boolean;
   mentioned?: string[];
@@ -43,7 +53,7 @@ export class Metadata {
   number: string;
   delay?: number;
   quoted?: Quoted;
-  linkPreview?: boolean;
+  linkPreview?: boolean | LinkPreviewCard;
   mentionsEveryOne?: boolean;
   mentioned?: string[];
   encoding?: boolean;
