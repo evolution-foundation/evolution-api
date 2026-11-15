@@ -67,6 +67,7 @@ import { Events, MessageSubtype, TypeMediaMessage, wa } from '@api/types/wa.type
 import { CacheEngine } from '@cache/cacheengine';
 import {
   AudioConverter,
+  Baileys,
   CacheConf,
   Chatwoot,
   ConfigService,
@@ -2393,10 +2394,14 @@ export class BaileysStartupService extends ChannelStartupService {
       const url = match[0].replace(/[.,);\]]+$/u, '');
       if (!url) return undefined;
 
+      // Fetches with googlebot by default to prevent login pages. Some sites only serve Open Graph tags to a specific
+      // crawler (and answer others with a redirect or an empty page), so the User-Agent can be configured.
+      const userAgent = this.configService.get<Baileys>('BAILEYS')?.LINK_PREVIEW_USER_AGENT || 'googlebot';
+
       const previewData = (await getLinkPreview(url, {
         imagesPropertyType: 'og', // fetches only open-graph images
         headers: {
-          'user-agent': 'googlebot', // fetches with googlebot to prevent login pages
+          'user-agent': userAgent,
         },
       })) as any;
 

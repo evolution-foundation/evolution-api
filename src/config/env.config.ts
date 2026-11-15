@@ -326,7 +326,7 @@ export type Webhook = {
 };
 export type Pusher = { ENABLED: boolean; GLOBAL?: GlobalPusher; EVENTS: EventsPusher };
 export type ConfigSessionPhone = { CLIENT: string; NAME: string };
-export type Baileys = { VERSION?: string };
+export type Baileys = { VERSION?: string; LINK_PREVIEW_USER_AGENT: string };
 export type QrCode = { LIMIT: number; COLOR: string };
 export type Typebot = { ENABLED: boolean; API_VERSION: string; SEND_MEDIA_BASE64: boolean };
 export type Chatwoot = {
@@ -832,6 +832,7 @@ export class ConfigService {
       },
       BAILEYS: {
         VERSION: process.env?.CONFIG_BAILEYS_VERSION,
+        LINK_PREVIEW_USER_AGENT: process.env?.CONFIG_BAILEYS_LINK_PREVIEW_USER_AGENT || 'googlebot',
       },
       QRCODE: {
         LIMIT: Number.parseInt(process.env.QRCODE_LIMIT) || 30,
