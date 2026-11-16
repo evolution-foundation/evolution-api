@@ -179,6 +179,7 @@ model Message {
   session   IntegrationSession? @relation(fields: [sessionId], references: [id])
 
   @@index([instanceId])
+  @@index([instanceId, chatwootMessageId])
 }
 
 model MessageUpdate {
