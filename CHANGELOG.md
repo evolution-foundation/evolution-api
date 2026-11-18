@@ -1,3 +1,11 @@
+# 2.3.8 (2026-11-06)
+
+### Security
+
+* **Instance isolation**: an instance's API key could act on other instances of the same installation
+  ([#2435](https://github.com/evolution-foundation/evolution-api/issues/2435)). Every request is now bound to the
+  instance it was authenticated for. Installations that host more than one instance should upgrade.
+
 # 2.3.7 (2025-12-05)
 
 ### Features
