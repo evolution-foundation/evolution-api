@@ -529,27 +529,53 @@ export class BaileysStartupService extends ChannelStartupService {
         AND "key"->>'id' = ${key.id}
       `) as proto.IWebMessageInfo[];
 
+      // IMPORTANT: returning a stub like { conversation: '' } causes Baileys to re-encrypt
+      // and re-send an EMPTY message on every retry-receipt, producing the random empty
+      // bubbles reported in https://github.com/EvolutionAPI/evolution-api/issues/721.
+      // When the original message cannot be located, return undefined so Baileys aborts
+      // the retry gracefully instead of broadcasting an empty payload.
+      if (!webMessageInfo?.length) {
+        this.logger.warn(`getMessage not found for retry-receipt (key.id=${key.id}); skipping retry`);
+        return undefined;
+      }
+
       if (full) {
         return webMessageInfo[0];
       }
-      if (webMessageInfo[0].message?.pollCreationMessage) {
-        const messageSecretBase64 = webMessageInfo[0].message?.messageContextInfo?.messageSecret;
+
+      const message = webMessageInfo[0].message;
+
+      if (!message) {
+        this.logger.warn(`getMessage found row without payload (key.id=${key.id}); skipping retry`);
+        return undefined;
+      }
+
+      // Envelopes that carry only context info should not be re-sent as content.
+      const meaningfulKeys = Object.keys(message).filter((k) => k !== 'messageContextInfo');
+      if (meaningfulKeys.length === 0) {
+        this.logger.warn(`getMessage payload has no meaningful content (key.id=${key.id}); skipping retry`);
+        return undefined;
+      }
+
+      if (message.pollCreationMessage) {
+        const messageSecretBase64 = message.messageContextInfo?.messageSecret;
 
         if (typeof messageSecretBase64 === 'string') {
           const messageSecret = Buffer.from(messageSecretBase64, 'base64');
 
           const msg = {
             messageContextInfo: { messageSecret },
-            pollCreationMessage: webMessageInfo[0].message?.pollCreationMessage,
+            pollCreationMessage: message.pollCreationMessage,
           };
 
           return msg;
         }
       }
 
-      return webMessageInfo[0].message;
-    } catch {
-      return { conversation: '' };
+      return message;
+    } catch (error) {
+      this.logger.warn(`getMessage failed for key.id=${key?.id}: ${error?.message ?? error}; skipping retry`);
+      return undefined;
     }
   }
 
@@ -2194,7 +2220,7 @@ export class BaileysStartupService extends ChannelStartupService {
       message['contextInfo'] = contextInfo;
     }
 
-    if (message['conversation']) {
+    if (typeof message['conversation'] === 'string' && message['conversation'].trim().length > 0) {
       return await this.client.sendMessage(
         sender,
         {
@@ -2208,6 +2234,12 @@ export class BaileysStartupService extends ChannelStartupService {
     }
 
     if (!message['audio'] && !message['poll'] && !message['sticker'] && sender != 'status@broadcast') {
+      // Defensive guard: never `forward` an empty envelope (would broadcast blank bubbles).
+      if (this.isEmptyOutgoingContent(message)) {
+        this.logger.warn(`Refusing to forward empty message envelope to ${sender}`);
+        throw new BadRequestException('Empty message content; refusing to forward.');
+      }
+
       return await this.client.sendMessage(
         sender,
         {
@@ -2292,6 +2324,13 @@ export class BaileysStartupService extends ChannelStartupService {
     options?: Options,
     isIntegration = false,
   ) {
+    if (this.isEmptyOutgoingContent(message)) {
+      const payloadKeys =
+        message && typeof message === 'object' ? Object.keys(message as any).join(',') : typeof message;
+      this.logger.warn(`Refusing to send empty message to ${number}; payloadKeys=${payloadKeys}`);
+      throw new BadRequestException('Empty message content; refusing to send.');
+    }
+
     const isWA = (await this.whatsappNumber({ numbers: [number] }))?.shift();
 
     if (!isWA.exists && !isJidGroup(isWA.jid) && !isWA.jid.includes('@broadcast')) {
@@ -2303,7 +2342,7 @@ export class BaileysStartupService extends ChannelStartupService {
     this.logger.verbose(`Sending message to ${sender}`);
 
     try {
-      if (options?.delay) {
+      if (options?.delay && !isJidNewsletter(sender)) {
         this.logger.verbose(`Typing for ${options.delay}ms to ${sender}`);
         if (options.delay > 20000) {
           let remainingDelay = options.delay;
@@ -2743,11 +2782,14 @@ export class BaileysStartupService extends ChannelStartupService {
     return statusSent;
   }
 
-  private async prepareMediaMessage(mediaMessage: MediaMessage) {
+  private async prepareMediaMessage(mediaMessage: MediaMessage, jid?: string) {
     try {
       const type = mediaMessage.mediatype === 'ptv' ? 'video' : mediaMessage.mediatype;
 
       let mediaInput: any;
+      let imageThumbnail: Buffer | undefined;
+      let imageWidth: number | undefined;
+      let imageHeight: number | undefined;
       if (mediaMessage.mediatype === 'image') {
         let imageBuffer: Buffer;
         if (isURL(mediaMessage.media)) {
@@ -2772,7 +2814,23 @@ export class BaileysStartupService extends ChannelStartupService {
           imageBuffer = Buffer.from(mediaMessage.media, 'base64');
         }
 
-        mediaInput = await sharp(imageBuffer).jpeg().toBuffer();
+        const imageProcessor = sharp(imageBuffer, { failOn: 'none' }).rotate();
+        const metadata = await imageProcessor.metadata();
+
+        imageWidth = metadata.width;
+        imageHeight = metadata.height;
+
+        mediaInput = await imageProcessor.jpeg({ quality: 95, mozjpeg: true }).toBuffer();
+
+        try {
+          imageThumbnail = await sharp(mediaInput)
+            .resize(72, 72, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 60, mozjpeg: true })
+            .toBuffer();
+        } catch (thumbnailError) {
+          this.logger.warn(`Failed to generate jpegThumbnail: ${String(thumbnailError)}`);
+        }
+
         mediaMessage.fileName ??= 'image.jpg';
         mediaMessage.mimetype = 'image/jpeg';
       } else {
@@ -2785,7 +2843,10 @@ export class BaileysStartupService extends ChannelStartupService {
         {
           [type]: mediaInput,
         } as any,
-        { upload: this.client.waUploadToServer },
+        {
+          upload: this.client.waUploadToServer,
+          jid,
+        },
       );
 
       const mediaType = mediaMessage.mediatype + 'Message';
@@ -2877,13 +2938,24 @@ export class BaileysStartupService extends ChannelStartupService {
       prepareMedia[mediaType].caption = mediaMessage?.caption;
       prepareMedia[mediaType].mimetype = mimetype;
       prepareMedia[mediaType].fileName = mediaMessage.fileName;
+      if (mediaMessage.mediatype === 'image') {
+        if (imageThumbnail) {
+          prepareMedia[mediaType].jpegThumbnail = imageThumbnail;
+        }
+        if (imageWidth) {
+          prepareMedia[mediaType].width = imageWidth;
+        }
+        if (imageHeight) {
+          prepareMedia[mediaType].height = imageHeight;
+        }
+      }
 
       if (mediaMessage.mediatype === 'video') {
         prepareMedia[mediaType].gifPlayback = false;
       }
 
       return generateWAMessageFromContent(
-        '',
+        jid ?? '',
         { [mediaType]: { ...prepareMedia[mediaType] } },
         { userJid: this.instance.wuid },
       );
@@ -2983,7 +3055,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (file) mediaData.media = file.buffer.toString('base64');
 
-    const generate = await this.prepareMediaMessage(mediaData);
+    const generate = await this.prepareMediaMessage(mediaData, createJid(data.number));
 
     const mediaSent = await this.sendMessageWithTyping(
       data.number,
@@ -3014,7 +3086,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (file) mediaData.media = file.buffer.toString('base64');
 
-    const generate = await this.prepareMediaMessage(mediaData);
+    const generate = await this.prepareMediaMessage(mediaData, createJid(data.number));
 
     const mediaSent = await this.sendMessageWithTyping(
       data.number,
@@ -3508,8 +3580,9 @@ export class BaileysStartupService extends ChannelStartupService {
     const jids: {
       groups: { number: string; jid: string }[];
       broadcast: { number: string; jid: string }[];
+      newsletters: { number: string; jid: string }[];
       users: { number: string; jid: string; name?: string }[];
-    } = { groups: [], broadcast: [], users: [] };
+    } = { groups: [], broadcast: [], newsletters: [], users: [] };
 
     data.numbers.forEach((number) => {
       const jid = createJid(number);
@@ -3518,6 +3591,8 @@ export class BaileysStartupService extends ChannelStartupService {
         jids.groups.push({ number, jid });
       } else if (jid === 'status@broadcast') {
         jids.broadcast.push({ number, jid });
+      } else if (isJidNewsletter(jid)) {
+        jids.newsletters.push({ number, jid });
       } else {
         jids.users.push({ number, jid });
       }
@@ -3527,6 +3602,9 @@ export class BaileysStartupService extends ChannelStartupService {
 
     // BROADCAST
     onWhatsapp.push(...jids.broadcast.map(({ jid, number }) => new OnWhatsAppDto(jid, false, number)));
+
+    // NEWSLETTERS
+    onWhatsapp.push(...jids.newsletters.map(({ jid, number }) => new OnWhatsAppDto(jid, true, number)));
 
     // GROUPS
     const groups = await Promise.all(

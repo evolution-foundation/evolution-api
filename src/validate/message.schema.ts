@@ -70,7 +70,7 @@ export const textMessageSchema: JSONSchema7 = {
   type: 'object',
   properties: {
     number: { ...numberDefinition },
-    text: { type: 'string' },
+    text: { type: 'string', minLength: 1 },
     linkPreview: { type: 'boolean' },
     delay: {
       type: 'integer',
@@ -90,6 +90,7 @@ export const textMessageSchema: JSONSchema7 = {
     },
   },
   required: ['number', 'text'],
+  ...isNotEmpty('text'),
 };
 
 export const mediaMessageSchema: JSONSchema7 = {

@@ -35,7 +35,12 @@ function formatBRNumber(jid: string) {
 export function createJid(number: string): string {
   number = number.replace(/:\d+/, '');
 
-  if (number.includes('@g.us') || number.includes('@s.whatsapp.net') || number.includes('@lid')) {
+  if (
+    number.includes('@g.us') ||
+    number.includes('@s.whatsapp.net') ||
+    number.includes('@lid') ||
+    number.includes('@newsletter')
+  ) {
     return number;
   }
 

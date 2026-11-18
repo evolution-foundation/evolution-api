@@ -235,11 +235,11 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
       this.logger.log(`Got response from OpenAI: ${message?.substring(0, 50)}${message?.length > 50 ? '...' : ''}`);
 
       // Send the response
-      if (message) {
+      if (message && message.trim().length > 0) {
         this.logger.log('Sending message to WhatsApp');
         await this.sendMessageWhatsApp(instance, remoteJid, message, settings, true);
       } else {
-        this.logger.error('No message to send to WhatsApp');
+        this.logger.warn('Empty/blank OpenAI response; skipping WhatsApp send');
       }
 
       // Update session status

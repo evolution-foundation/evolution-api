@@ -1500,6 +1500,13 @@ export class ChatwootService {
               );
             }
           } else {
+            if (!formatText || !formatText.trim()) {
+              this.logger.warn(
+                `Skipping empty Chatwoot outgoing text for ${chatId} (instance=${instance.instanceName})`,
+              );
+              continue;
+            }
+
             const data: SendTextDto = {
               number: chatId,
               text: formatText,
@@ -1587,9 +1594,15 @@ export class ChatwootService {
       }
 
       if (body.message_type === 'template' && body.event === 'message_created') {
+        const templateText = (body.content ?? '').replace(/\\\r\n|\\\n|\n/g, '\n');
+        if (!templateText.trim()) {
+          this.logger.warn(`Skipping empty Chatwoot template message for ${chatId}`);
+          return { message: 'bot' };
+        }
+
         const data: SendTextDto = {
           number: chatId,
-          text: body.content.replace(/\\\r\n|\\\n|\n/g, '\n'),
+          text: templateText,
           delay: Math.floor(Math.random() * (2000 - 500 + 1)) + 500,
         };
 

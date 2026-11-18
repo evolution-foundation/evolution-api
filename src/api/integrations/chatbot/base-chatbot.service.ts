@@ -182,7 +182,10 @@ export abstract class BaseChatbotService<BotType = any, SettingsType = any> {
     settings: SettingsType,
     linkPreview: boolean = true,
   ): Promise<void> {
-    if (!message) return;
+    if (!message || !message.trim()) {
+      this.logger.warn(`[BaseChatbot] Skipping empty message for ${remoteJid}`);
+      return;
+    }
 
     const linkRegex = /!?\[(.*?)\]\((.*?)\)/g;
     let textBuffer = '';
@@ -274,6 +277,11 @@ export abstract class BaseChatbotService<BotType = any, SettingsType = any> {
     settings: any,
     linkPreview: boolean = true,
   ): Promise<void> {
+    if (!message || !message.trim()) {
+      this.logger.warn(`[BaseChatbot] Skipping empty single message for ${remoteJid}`);
+      return;
+    }
+
     const timePerChar = settings?.timePerChar ?? 0;
     const minDelay = 1000;
     const maxDelay = 20000;

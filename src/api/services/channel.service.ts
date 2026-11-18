@@ -852,4 +852,71 @@ export class ChannelStartupService {
 
     return mediaTypes.some((type) => msg[type] && Object.keys(msg[type]).length > 0);
   }
+
+  /**
+   * Detects payloads that would be sent to WhatsApp without any visible content.
+   * Used as a defensive guard against the random empty messages reported in
+   * https://github.com/EvolutionAPI/evolution-api/issues/721 (and similar).
+   * Accepts either a raw `proto.IMessage`-like object or a Baileys send payload.
+   */
+  public isEmptyOutgoingContent(message: any): boolean {
+    if (!message || typeof message !== 'object') return true;
+
+    const isBlankString = (value: any) => typeof value === 'string' && value.trim().length === 0;
+
+    if ('conversation' in message && isBlankString(message.conversation)) return true;
+    if ('text' in message && isBlankString(message.text)) return true;
+    if (message.extendedTextMessage && isBlankString(message.extendedTextMessage.text)) return true;
+
+    const meaningfulPayloadKeys = [
+      'conversation',
+      'text',
+      'extendedTextMessage',
+      'imageMessage',
+      'videoMessage',
+      'audioMessage',
+      'documentMessage',
+      'documentWithCaptionMessage',
+      'stickerMessage',
+      'ptvMessage',
+      'contactMessage',
+      'contactsArrayMessage',
+      'locationMessage',
+      'liveLocationMessage',
+      'pollCreationMessage',
+      'pollCreationMessageV2',
+      'pollCreationMessageV3',
+      'reactionMessage',
+      'protocolMessage',
+      'viewOnceMessage',
+      'viewOnceMessageV2',
+      'viewOnceMessageV2Extension',
+      'ephemeralMessage',
+      'templateMessage',
+      'buttonsMessage',
+      'listMessage',
+      'productMessage',
+      'orderMessage',
+      'groupInviteMessage',
+      'image',
+      'video',
+      'audio',
+      'document',
+      'sticker',
+      'poll',
+      'forward',
+      'react',
+      'delete',
+      'status',
+    ];
+
+    const hasAnyContent = meaningfulPayloadKeys.some((key) => {
+      const value = (message as any)[key];
+      if (value === undefined || value === null) return false;
+      if (typeof value === 'string') return value.trim().length > 0;
+      return true;
+    });
+
+    return !hasAnyContent;
+  }
 }
