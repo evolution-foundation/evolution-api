@@ -3270,6 +3270,16 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if (lowerCaseImage.includes('.webp')) return this.isAnimatedWebp(buffer);
 
+    // Base64 input (or a URL without extension) has no name to look at: check the file signature instead.
+    if (buffer.length >= 6 && buffer.toString('ascii', 0, 4) === 'GIF8') return true;
+    if (
+      buffer.length >= 12 &&
+      buffer.toString('ascii', 0, 4) === 'RIFF' &&
+      buffer.toString('ascii', 8, 12) === 'WEBP'
+    ) {
+      return this.isAnimatedWebp(buffer);
+    }
+
     return false;
   }
 
@@ -3282,9 +3292,11 @@ export class BaileysStartupService extends ChannelStartupService {
       ? Buffer.from(data.sticker, 'base64')
       : await this.convertToWebP(data.sticker);
     const gifPlayback = data.sticker.includes('.gif');
+    // WhatsApp only plays a sticker when the StickerMessage says it is animated.
+    const isAnimated = this.isAnimatedWebp(convert);
     const result = await this.sendMessageWithTyping(
       data.number,
-      { sticker: convert, gifPlayback },
+      { sticker: convert, gifPlayback, ...(isAnimated ? { isAnimated: true } : {}) },
       {
         delay: data?.delay,
         presence: 'composing',
