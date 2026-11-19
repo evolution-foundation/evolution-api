@@ -1974,7 +1974,11 @@ export class BaileysStartupService extends ChannelStartupService {
 
       groupMetadataUpdate.forEach((group) => {
         if (isJidGroup(group.id)) {
-          this.updateGroupMetadataCache(group.id);
+          // groupFetchAllParticipating emits the full metadata of every group here (on connect and on dirty
+          // notifications). Cache it as is instead of fetching each group again, which hits rate-overlimit
+          // on accounts with many groups. Partial updates (subject, settings) still refetch.
+          const isFullMetadata = Array.isArray(group.participants) && group.subject !== undefined;
+          this.updateGroupMetadataCache(group.id, isFullMetadata ? (group as GroupMetadata) : undefined);
         }
       });
     },
@@ -4779,9 +4783,9 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   // Group
-  private async updateGroupMetadataCache(groupJid: string) {
+  private async updateGroupMetadataCache(groupJid: string, metadata?: GroupMetadata) {
     try {
-      const meta = await this.client.groupMetadata(groupJid);
+      const meta = metadata ?? (await this.client.groupMetadata(groupJid));
 
       const cacheConf = this.configService.get<CacheConf>('CACHE');
 
