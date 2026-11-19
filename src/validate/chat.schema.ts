@@ -195,8 +195,9 @@ export const contactValidateSchema: JSONSchema7 = {
         _id: { type: 'string', minLength: 1 },
         pushName: { type: 'string', minLength: 1 },
         id: { type: 'string', minLength: 1 },
+        remoteJid: { type: 'string', minLength: 1 },
       },
-      ...isNotEmpty('_id', 'id', 'pushName'),
+      ...isNotEmpty('_id', 'id', 'pushName', 'remoteJid'),
     },
   },
 };

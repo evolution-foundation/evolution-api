@@ -6,3 +6,16 @@ export class TemplateDto {
   components: any;
   webhookUrl?: string;
 }
+
+export class TemplateEditDto {
+  templateId: string;
+  category?: 'AUTHENTICATION' | 'MARKETING' | 'UTILITY';
+  allowCategoryChange?: boolean;
+  ttl?: number;
+  components?: any;
+}
+
+export class TemplateDeleteDto {
+  name: string;
+  hsmId?: string;
+}

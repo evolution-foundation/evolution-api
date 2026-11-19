@@ -12,8 +12,9 @@ const resources: any = {};
 languages.forEach((language) => {
   const languagePath = path.join(translationsPath, `${language}.json`);
   if (fs.existsSync(languagePath)) {
+    const translationContent = fs.readFileSync(languagePath, 'utf8');
     resources[language] = {
-      translation: require(languagePath),
+      translation: JSON.parse(translationContent),
     };
   }
 });

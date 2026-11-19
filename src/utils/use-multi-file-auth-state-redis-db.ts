@@ -8,6 +8,7 @@ export async function useMultiFileAuthStateRedisDb(
 ): Promise<{
   state: AuthenticationState;
   saveCreds: () => Promise<void>;
+  removeCreds: () => Promise<void>;
 }> {
   const logger = new Logger('useMultiFileAuthStateRedisDb');
 
@@ -36,6 +37,16 @@ export async function useMultiFileAuthStateRedisDb(
     }
   };
 
+  async function removeCreds(): Promise<any> {
+    try {
+      logger.warn({ action: 'redis.delete', instanceName });
+
+      return await cache.delete(instanceName);
+    } catch {
+      return;
+    }
+  }
+
   const creds: AuthenticationCreds = (await readData('creds')) || initAuthCreds();
 
   return {
@@ -50,7 +61,7 @@ export async function useMultiFileAuthStateRedisDb(
             ids.map(async (id) => {
               let value = await readData(`${type}-${id}`);
               if (type === 'app-state-sync-key' && value) {
-                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                value = proto.Message.AppStateSyncKeyData.create(value);
               }
 
               data[id] = value;
@@ -76,5 +87,7 @@ export async function useMultiFileAuthStateRedisDb(
     saveCreds: async () => {
       return await writeData(creds, 'creds');
     },
+
+    removeCreds,
   };
 }

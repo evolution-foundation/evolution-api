@@ -1,10 +1,11 @@
+import { configService, Sentry as SentryConfig } from '@config/env.config';
 import * as Sentry from '@sentry/node';
 
-const dsn = process.env.SENTRY_DSN;
+const sentryConfig = configService.get<SentryConfig>('SENTRY');
 
-if (dsn) {
+if (sentryConfig.DSN) {
   Sentry.init({
-    dsn: dsn,
+    dsn: sentryConfig.DSN,
     environment: process.env.NODE_ENV || 'development',
     tracesSampleRate: 1.0,
     profilesSampleRate: 1.0,

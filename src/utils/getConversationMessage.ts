@@ -3,7 +3,13 @@ import { configService, S3 } from '@config/env.config';
 const getTypeMessage = (msg: any) => {
   let mediaId: string;
 
-  if (configService.get<S3>('S3').ENABLE) mediaId = msg.message?.mediaUrl;
+  if (
+    configService.get<S3>('S3').ENABLE &&
+    (configService.get<S3>('S3').SAVE_VIDEO ||
+      (msg?.message?.videoMessage === undefined &&
+        msg?.message?.viewOnceMessageV2?.message?.videoMessage === undefined))
+  )
+    mediaId = msg.message?.mediaUrl;
   else mediaId = msg.key?.id;
 
   const types = {

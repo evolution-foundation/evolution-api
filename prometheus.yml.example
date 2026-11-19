@@ -1,0 +1,76 @@
+# Prometheus configuration example for Evolution API
+# Copy this file to prometheus.yml and adjust the settings
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Evolution API metrics
+  - job_name: 'evolution-api'
+    static_configs:
+      - targets: ['localhost:8080']  # Adjust to your Evolution API URL
+    
+    # Metrics endpoint path
+    metrics_path: '/metrics'
+    
+    # Scrape interval for this job
+    scrape_interval: 30s
+    
+    # Basic authentication (if METRICS_AUTH_REQUIRED=true)
+    basic_auth:
+      username: 'prometheus'  # Should match METRICS_USER
+      password: 'secure_random_password_here'  # Should match METRICS_PASSWORD
+    
+    # Optional: Add custom labels
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: localhost:8080  # Evolution API address
+
+# Alerting configuration (optional)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# Example alert rules for Evolution API
+# Create a file called evolution_alerts.yml with these rules:
+#
+# groups:
+#   - name: evolution-api
+#     rules:
+#       - alert: EvolutionAPIDown
+#         expr: up{job="evolution-api"} == 0
+#         for: 1m
+#         labels:
+#           severity: critical
+#         annotations:
+#           summary: "Evolution API is down"
+#           description: "Evolution API has been down for more than 1 minute."
+#       
+#       - alert: EvolutionInstanceDown
+#         expr: evolution_instance_up == 0
+#         for: 2m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "Evolution instance {{ $labels.instance }} is down"
+#           description: "Instance {{ $labels.instance }} has been down for more than 2 minutes."
+#       
+#       - alert: HighInstanceCount
+#         expr: evolution_instances_total > 100
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "High number of Evolution instances"
+#           description: "Evolution API is managing {{ $value }} instances."

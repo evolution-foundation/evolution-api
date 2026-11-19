@@ -6,6 +6,7 @@ import { ConfigService, HttpServer } from '@config/env.config';
 import { EvolutionBot, EvolutionBotSetting, IntegrationSession } from '@prisma/client';
 import { sendTelemetry } from '@utils/sendTelemetry';
 import axios from 'axios';
+import { isURL } from 'class-validator';
 
 import { BaseChatbotService } from '../../base-chatbot.service';
 import { OpenaiService } from '../../openai/services/openai.service';
@@ -71,16 +72,26 @@ export class EvolutionBotService extends BaseChatbotService<EvolutionBot, Evolut
         }
       }
 
-      if (this.isImageMessage(content)) {
-        const contentSplit = content.split('|');
+      if (this.isImageMessage(content) && msg) {
+        const media = content.split('|');
 
-        payload.files = [
-          {
-            type: 'image',
-            url: contentSplit[1].split('?')[0],
-          },
-        ];
-        payload.query = contentSplit[2] || content;
+        if (msg.message.mediaUrl || msg.message.base64) {
+          payload.files = [
+            {
+              type: 'image',
+              url: msg.message.base64 || msg.message.mediaUrl,
+            },
+          ];
+        } else {
+          payload.files = [
+            {
+              type: 'image',
+              url: media[1].split('?')[0],
+            },
+          ];
+        }
+
+        payload.query = media[2] || content;
       }
 
       if (instance.integration === Integration.WHATSAPP_BAILEYS) {
@@ -106,6 +117,15 @@ export class EvolutionBotService extends BaseChatbotService<EvolutionBot, Evolut
         };
       }
 
+      // Sanitize payload for logging (remove sensitive data)
+      const sanitizedPayload = {
+        ...payload,
+        inputs: {
+          ...payload.inputs,
+          apiKey: payload.inputs.apiKey ? '[REDACTED]' : undefined,
+        },
+      };
+
       const response = await axios.post(endpoint, payload, {
         headers,
       });
@@ -115,6 +135,10 @@ export class EvolutionBotService extends BaseChatbotService<EvolutionBot, Evolut
       }
 
       let message = response?.data?.message;
+      const rawLinkPreview = response?.data?.linkPreview;
+
+      // Validate linkPreview is boolean and default to true for backward compatibility
+      const linkPreview = typeof rawLinkPreview === 'boolean' ? rawLinkPreview : true;
 
       if (message && typeof message === 'string' && message.startsWith("'") && message.endsWith("'")) {
         const innerContent = message.slice(1, -1);
@@ -124,8 +148,10 @@ export class EvolutionBotService extends BaseChatbotService<EvolutionBot, Evolut
       }
 
       if (message) {
-        // Use the base class method to send the message to WhatsApp
-        await this.sendMessageWhatsApp(instance, remoteJid, message, settings);
+        // Use the base class method that handles splitMessages functionality
+        await this.sendMessageWhatsApp(instance, remoteJid, message, settings, linkPreview);
+      } else {
+        this.logger.warn(`[EvolutionBot] No message content received from bot response`);
       }
 
       // Send telemetry

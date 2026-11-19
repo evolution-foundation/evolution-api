@@ -5,6 +5,7 @@ import { ConfigService, HttpServer } from '@config/env.config';
 import { Evoai, EvoaiSetting, IntegrationSession } from '@prisma/client';
 import axios from 'axios';
 import { downloadMediaMessage } from 'baileys';
+import { isURL } from 'class-validator';
 import { v4 as uuidv4 } from 'uuid';
 
 import { BaseChatbotService } from '../../base-chatbot.service';
@@ -82,23 +83,43 @@ export class EvoaiService extends BaseChatbotService<Evoai, EvoaiSetting> {
 
       // Handle image message if present
       if (this.isImageMessage(content) && msg) {
-        const contentSplit = content.split('|');
-        parts[0].text = contentSplit[2] || content;
+        const media = content.split('|');
+        parts[0].text = media[2] || content;
 
         try {
-          // Download the image
-          const mediaBuffer = await downloadMediaMessage(msg, 'buffer', {});
-          const fileContent = Buffer.from(mediaBuffer).toString('base64');
-          const fileName = contentSplit[2] || `${msg.key?.id || 'image'}.jpg`;
+          if (msg.message.mediaUrl || msg.message.base64) {
+            let mediaBase64 = msg.message.base64 || null;
 
-          parts.push({
-            type: 'file',
-            file: {
-              name: fileName,
-              mimeType: 'image/jpeg',
-              bytes: fileContent,
-            },
-          } as any);
+            if (msg.message.mediaUrl && isURL(msg.message.mediaUrl)) {
+              const result = await axios.get(msg.message.mediaUrl, { responseType: 'arraybuffer' });
+              mediaBase64 = Buffer.from(result.data).toString('base64');
+            }
+
+            if (mediaBase64) {
+              parts.push({
+                type: 'file',
+                file: {
+                  name: msg.key.id + '.jpeg',
+                  mimeType: 'image/jpeg',
+                  bytes: mediaBase64,
+                },
+              } as any);
+            }
+          } else {
+            // Download the image
+            const mediaBuffer = await downloadMediaMessage(msg, 'buffer', {});
+            const fileContent = Buffer.from(mediaBuffer).toString('base64');
+            const fileName = media[2] || `${msg.key?.id || 'image'}.jpg`;
+
+            parts.push({
+              type: 'file',
+              file: {
+                name: fileName,
+                mimeType: 'image/jpeg',
+                bytes: fileContent,
+              },
+            } as any);
+          }
         } catch (fileErr) {
           this.logger.error(`[EvoAI] Failed to process image: ${fileErr}`);
         }
@@ -174,7 +195,7 @@ export class EvoaiService extends BaseChatbotService<Evoai, EvoaiSetting> {
       this.logger.debug(`[EvoAI] Extracted message to send: ${message}`);
 
       if (message) {
-        await this.sendMessageWhatsApp(instance, remoteJid, message, settings);
+        await this.sendMessageWhatsApp(instance, remoteJid, message, settings, true);
       }
     } catch (error) {
       this.logger.error(

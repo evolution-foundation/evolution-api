@@ -6,7 +6,15 @@ import { ProviderFiles } from '@api/provider/sessions';
 import { PrismaRepository } from '@api/repository/repository.service';
 import { HttpStatus, router } from '@api/routes/index.router';
 import { eventManager, waMonitor } from '@api/server.module';
-import { Auth, configService, Cors, HttpServer, ProviderSession, Webhook } from '@config/env.config';
+import {
+  Auth,
+  configService,
+  Cors,
+  HttpServer,
+  ProviderSession,
+  Sentry as SentryConfig,
+  Webhook,
+} from '@config/env.config';
 import { onUnexpectedError } from '@config/error.config';
 import { Logger } from '@config/logger.config';
 import { ROOT_DIR } from '@config/path.config';
@@ -18,8 +26,8 @@ import cors from 'cors';
 import express, { json, NextFunction, Request, Response, urlencoded } from 'express';
 import { join } from 'path';
 
-function initWA() {
-  waMonitor.loadInstance();
+async function initWA() {
+  await waMonitor.loadInstance();
 }
 
 async function bootstrap() {
@@ -140,7 +148,8 @@ async function bootstrap() {
 
   eventManager.init(server);
 
-  if (process.env.SENTRY_DSN) {
+  const sentryConfig = configService.get<SentryConfig>('SENTRY');
+  if (sentryConfig.DSN) {
     logger.info('Sentry - ON');
 
     // Add this after all routes,
@@ -150,7 +159,9 @@ async function bootstrap() {
 
   server.listen(httpServer.PORT, () => logger.log(httpServer.TYPE.toUpperCase() + ' - ON: ' + httpServer.PORT));
 
-  initWA();
+  initWA().catch((error) => {
+    logger.error('Error loading instances: ' + error);
+  });
 
   onUnexpectedError();
 }

@@ -1,6 +1,10 @@
 name: Check Code Quality
 
-on: [pull_request]
+on: 
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ main, develop ]
 
 jobs:
   check-lint-and-build:
@@ -8,20 +12,30 @@ jobs:
     timeout-minutes: 10
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v5
+      with:
+        submodules: recursive
 
     - name: Install Node
-      uses: actions/setup-node@v1
+      uses: actions/setup-node@v5
       with:
         node-version: 20.x
 
+    - name: Cache node modules
+      uses: actions/cache@v4
+      with:
+        path: ~/.npm
+        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-node-
+
     - name: Install packages
-      run: npm install
+      run: npm ci
     
     - name: Check linting
       run: npm run lint:check
 
-    - name: Check build
+    - name: Generate Prisma client
       run: npm run db:generate
 
     - name: Check build

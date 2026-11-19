@@ -1,3 +1,4 @@
+import { KafkaRouter } from '@api/integrations/event/kafka/kafka.router';
 import { NatsRouter } from '@api/integrations/event/nats/nats.router';
 import { PusherRouter } from '@api/integrations/event/pusher/pusher.router';
 import { RabbitmqRouter } from '@api/integrations/event/rabbitmq/rabbitmq.router';
@@ -18,5 +19,6 @@ export class EventRouter {
     this.router.use('/nats', new NatsRouter(...guards).router);
     this.router.use('/pusher', new PusherRouter(...guards).router);
     this.router.use('/sqs', new SqsRouter(...guards).router);
+    this.router.use('/kafka', new KafkaRouter(...guards).router);
   }
 }

@@ -1,0 +1,608 @@
+---
+description: Storage integration patterns for Evolution API
+globs:
+  - "src/api/integrations/storage/**/*.ts"
+alwaysApply: false
+---
+
+# Evolution API Storage Integration Rules
+
+## Storage Service Pattern
+
+### Base Storage Service Structure
+```typescript
+import { InstanceDto } from '@api/dto/instance.dto';
+import { PrismaRepository } from '@api/repository/repository.service';
+import { Logger } from '@config/logger.config';
+import { BadRequestException } from '@exceptions';
+
+export class StorageService {
+  constructor(private readonly prismaRepository: PrismaRepository) {}
+
+  private readonly logger = new Logger('StorageService');
+
+  public async getMedia(instance: InstanceDto, query?: MediaDto) {
+    try {
+      const where: any = {
+        instanceId: instance.instanceId,
+        ...query,
+      };
+
+      const media = await this.prismaRepository.media.findMany({
+        where,
+        select: {
+          id: true,
+          fileName: true,
+          type: true,
+          mimetype: true,
+          createdAt: true,
+          Message: true,
+        },
+      });
+
+      if (!media || media.length === 0) {
+        throw 'Media not found';
+      }
+
+      return media;
+    } catch (error) {
+      throw new BadRequestException(error);
+    }
+  }
+
+  public async getMediaUrl(instance: InstanceDto, data: MediaDto) {
+    const media = (await this.getMedia(instance, { id: data.id }))[0];
+    const mediaUrl = await this.generateUrl(media.fileName, data.expiry);
+    return {
+      mediaUrl,
+      ...media,
+    };
+  }
+
+  protected abstract generateUrl(fileName: string, expiry?: number): Promise<string>;
+}
+```
+
+## S3/MinIO Integration Pattern
+
+### MinIO Client Setup
+```typescript
+import { ConfigService, S3 } from '@config/env.config';
+import { Logger } from '@config/logger.config';
+import { BadRequestException } from '@exceptions';
+import * as MinIo from 'minio';
+import { join } from 'path';
+import { Readable, Transform } from 'stream';
+
+const logger = new Logger('S3 Service');
+const BUCKET = new ConfigService().get<S3>('S3');
+
+interface Metadata extends MinIo.ItemBucketMetadata {
+  instanceId: string;
+  messageId?: string;
+}
+
+const minioClient = (() => {
+  if (BUCKET?.ENABLE) {
+    return new MinIo.Client({
+      endPoint: BUCKET.ENDPOINT,
+      port: BUCKET.PORT,
+      useSSL: BUCKET.USE_SSL,
+      accessKey: BUCKET.ACCESS_KEY,
+      secretKey: BUCKET.SECRET_KEY,
+      region: BUCKET.REGION,
+    });
+  }
+})();
+
+const bucketName = process.env.S3_BUCKET;
+```
+
+### Bucket Management Functions
+```typescript
+const bucketExists = async (): Promise<boolean> => {
+  if (minioClient) {
+    try {
+      const list = await minioClient.listBuckets();
+      return !!list.find((bucket) => bucket.name === bucketName);
+    } catch (error) {
+      logger.error('Error checking bucket existence:', error);
+      return false;
+    }
+  }
+  return false;
+};
+
+const setBucketPolicy = async (): Promise<void> => {
+  if (minioClient && bucketName) {
+    try {
+      const policy = {
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { AWS: ['*'] },
+            Action: ['s3:GetObject'],
+            Resource: [`arn:aws:s3:::${bucketName}/*`],
+          },
+        ],
+      };
+
+      await minioClient.setBucketPolicy(bucketName, JSON.stringify(policy));
+      logger.log('Bucket policy set successfully');
+    } catch (error) {
+      logger.error('Error setting bucket policy:', error);
+    }
+  }
+};
+
+const createBucket = async (): Promise<void> => {
+  if (minioClient && bucketName) {
+    try {
+      const exists = await bucketExists();
+      if (!exists) {
+        await minioClient.makeBucket(bucketName, BUCKET.REGION || 'us-east-1');
+        await setBucketPolicy();
+        logger.log(`Bucket ${bucketName} created successfully`);
+      }
+    } catch (error) {
+      logger.error('Error creating bucket:', error);
+    }
+  }
+};
+```
+
+### File Upload Functions
+```typescript
+export const uploadFile = async (
+  fileName: string,
+  buffer: Buffer,
+  mimetype: string,
+  metadata?: Metadata,
+): Promise<string> => {
+  if (!minioClient || !bucketName) {
+    throw new BadRequestException('S3 storage not configured');
+  }
+
+  try {
+    await createBucket();
+
+    const uploadMetadata = {
+      'Content-Type': mimetype,
+      ...metadata,
+    };
+
+    await minioClient.putObject(bucketName, fileName, buffer, buffer.length, uploadMetadata);
+    
+    logger.log(`File ${fileName} uploaded successfully`);
+    return fileName;
+  } catch (error) {
+    logger.error(`Error uploading file ${fileName}:`, error);
+    throw new BadRequestException(`Failed to upload file: ${error.message}`);
+  }
+};
+
+export const uploadStream = async (
+  fileName: string,
+  stream: Readable,
+  size: number,
+  mimetype: string,
+  metadata?: Metadata,
+): Promise<string> => {
+  if (!minioClient || !bucketName) {
+    throw new BadRequestException('S3 storage not configured');
+  }
+
+  try {
+    await createBucket();
+
+    const uploadMetadata = {
+      'Content-Type': mimetype,
+      ...metadata,
+    };
+
+    await minioClient.putObject(bucketName, fileName, stream, size, uploadMetadata);
+    
+    logger.log(`Stream ${fileName} uploaded successfully`);
+    return fileName;
+  } catch (error) {
+    logger.error(`Error uploading stream ${fileName}:`, error);
+    throw new BadRequestException(`Failed to upload stream: ${error.message}`);
+  }
+};
+```
+
+### File Download Functions
+```typescript
+export const getObject = async (fileName: string): Promise<Buffer> => {
+  if (!minioClient || !bucketName) {
+    throw new BadRequestException('S3 storage not configured');
+  }
+
+  try {
+    const stream = await minioClient.getObject(bucketName, fileName);
+    const chunks: Buffer[] = [];
+
+    return new Promise((resolve, reject) => {
+      stream.on('data', (chunk) => chunks.push(chunk));
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+      stream.on('error', reject);
+    });
+  } catch (error) {
+    logger.error(`Error getting object ${fileName}:`, error);
+    throw new BadRequestException(`Failed to get object: ${error.message}`);
+  }
+};
+
+export const getObjectUrl = async (fileName: string, expiry: number = 3600): Promise<string> => {
+  if (!minioClient || !bucketName) {
+    throw new BadRequestException('S3 storage not configured');
+  }
+
+  try {
+    const url = await minioClient.presignedGetObject(bucketName, fileName, expiry);
+    logger.log(`Generated URL for ${fileName} with expiry ${expiry}s`);
+    return url;
+  } catch (error) {
+    logger.error(`Error generating URL for ${fileName}:`, error);
+    throw new BadRequestException(`Failed to generate URL: ${error.message}`);
+  }
+};
+
+export const getObjectStream = async (fileName: string): Promise<Readable> => {
+  if (!minioClient || !bucketName) {
+    throw new BadRequestException('S3 storage not configured');
+  }
+
+  try {
+    const stream = await minioClient.getObject(bucketName, fileName);
+    return stream;
+  } catch (error) {
+    logger.error(`Error getting object stream ${fileName}:`, error);
+    throw new BadRequestException(`Failed to get object stream: ${error.message}`);
+  }
+};
+```
+
+### File Management Functions
+```typescript
+export const deleteObject = async (fileName: string): Promise<void> => {
+  if (!minioClient || !bucketName) {
+    throw new BadRequestException('S3 storage not configured');
+  }
+
+  try {
+    await minioClient.removeObject(bucketName, fileName);
+    logger.log(`File ${fileName} deleted successfully`);
+  } catch (error) {
+    logger.error(`Error deleting file ${fileName}:`, error);
+    throw new BadRequestException(`Failed to delete file: ${error.message}`);
+  }
+};
+
+export const listObjects = async (prefix?: string): Promise<MinIo.BucketItem[]> => {
+  if (!minioClient || !bucketName) {
+    throw new BadRequestException('S3 storage not configured');
+  }
+
+  try {
+    const objects: MinIo.BucketItem[] = [];
+    const stream = minioClient.listObjects(bucketName, prefix, true);
+
+    return new Promise((resolve, reject) => {
+      stream.on('data', (obj) => objects.push(obj));
+      stream.on('end', () => resolve(objects));
+      stream.on('error', reject);
+    });
+  } catch (error) {
+    logger.error('Error listing objects:', error);
+    throw new BadRequestException(`Failed to list objects: ${error.message}`);
+  }
+};
+
+export const objectExists = async (fileName: string): Promise<boolean> => {
+  if (!minioClient || !bucketName) {
+    return false;
+  }
+
+  try {
+    await minioClient.statObject(bucketName, fileName);
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+```
+
+## Storage Controller Pattern
+
+### S3 Controller Implementation
+```typescript
+import { InstanceDto } from '@api/dto/instance.dto';
+import { MediaDto } from '@api/integrations/storage/s3/dto/media.dto';
+import { S3Service } from '@api/integrations/storage/s3/services/s3.service';
+
+export class S3Controller {
+  constructor(private readonly s3Service: S3Service) {}
+
+  public async getMedia(instance: InstanceDto, data: MediaDto) {
+    return this.s3Service.getMedia(instance, data);
+  }
+
+  public async getMediaUrl(instance: InstanceDto, data: MediaDto) {
+    return this.s3Service.getMediaUrl(instance, data);
+  }
+
+  public async uploadMedia(instance: InstanceDto, data: UploadMediaDto) {
+    return this.s3Service.uploadMedia(instance, data);
+  }
+
+  public async deleteMedia(instance: InstanceDto, data: MediaDto) {
+    return this.s3Service.deleteMedia(instance, data);
+  }
+}
+```
+
+## Storage Router Pattern
+
+### Storage Router Structure
+```typescript
+import { S3Router } from '@api/integrations/storage/s3/routes/s3.router';
+import { Router } from 'express';
+
+export class StorageRouter {
+  public readonly router: Router;
+
+  constructor(...guards: any[]) {
+    this.router = Router();
+
+    this.router.use('/s3', new S3Router(...guards).router);
+    // Add other storage providers here
+    // this.router.use('/gcs', new GCSRouter(...guards).router);
+    // this.router.use('/azure', new AzureRouter(...guards).router);
+  }
+}
+```
+
+### S3 Specific Router
+```typescript
+import { RouterBroker } from '@api/abstract/abstract.router';
+import { MediaDto } from '@api/integrations/storage/s3/dto/media.dto';
+import { s3Schema, s3UrlSchema } from '@api/integrations/storage/s3/validate/s3.schema';
+import { HttpStatus } from '@api/routes/index.router';
+import { s3Controller } from '@api/server.module';
+import { RequestHandler, Router } from 'express';
+
+export class S3Router extends RouterBroker {
+  constructor(...guards: RequestHandler[]) {
+    super();
+    this.router
+      .post(this.routerPath('getMedia'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<MediaDto>({
+          request: req,
+          schema: s3Schema,
+          ClassRef: MediaDto,
+          execute: (instance, data) => s3Controller.getMedia(instance, data),
+        });
+
+        res.status(HttpStatus.OK).json(response);
+      })
+      .post(this.routerPath('getMediaUrl'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<MediaDto>({
+          request: req,
+          schema: s3UrlSchema,
+          ClassRef: MediaDto,
+          execute: (instance, data) => s3Controller.getMediaUrl(instance, data),
+        });
+
+        res.status(HttpStatus.OK).json(response);
+      })
+      .post(this.routerPath('uploadMedia'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<UploadMediaDto>({
+          request: req,
+          schema: uploadSchema,
+          ClassRef: UploadMediaDto,
+          execute: (instance, data) => s3Controller.uploadMedia(instance, data),
+        });
+
+        res.status(HttpStatus.CREATED).json(response);
+      })
+      .delete(this.routerPath('deleteMedia'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<MediaDto>({
+          request: req,
+          schema: s3Schema,
+          ClassRef: MediaDto,
+          execute: (instance, data) => s3Controller.deleteMedia(instance, data),
+        });
+
+        res.status(HttpStatus.OK).json(response);
+      });
+  }
+
+  public readonly router: Router = Router();
+}
+```
+
+## Storage DTO Pattern
+
+### Media DTO
+```typescript
+export class MediaDto {
+  id?: string;
+  fileName?: string;
+  type?: string;
+  mimetype?: string;
+  expiry?: number;
+}
+
+export class UploadMediaDto {
+  fileName: string;
+  mimetype: string;
+  buffer?: Buffer;
+  base64?: string;
+  url?: string;
+  metadata?: {
+    instanceId: string;
+    messageId?: string;
+    contactId?: string;
+    [key: string]: any;
+  };
+}
+```
+
+## Storage Validation Schema
+
+### S3 Validation Schemas
+```typescript
+import Joi from 'joi';
+
+export const s3Schema = Joi.object({
+  id: Joi.string().optional(),
+  fileName: Joi.string().optional(),
+  type: Joi.string().optional().valid('image', 'video', 'audio', 'document'),
+  mimetype: Joi.string().optional(),
+  expiry: Joi.number().optional().min(60).max(604800).default(3600), // 1 min to 7 days
+}).min(1).required();
+
+export const s3UrlSchema = Joi.object({
+  id: Joi.string().required(),
+  expiry: Joi.number().optional().min(60).max(604800).default(3600),
+}).required();
+
+export const uploadSchema = Joi.object({
+  fileName: Joi.string().required().max(255),
+  mimetype: Joi.string().required(),
+  buffer: Joi.binary().optional(),
+  base64: Joi.string().base64().optional(),
+  url: Joi.string().uri().optional(),
+  metadata: Joi.object({
+    instanceId: Joi.string().required(),
+    messageId: Joi.string().optional(),
+    contactId: Joi.string().optional(),
+  }).optional(),
+}).xor('buffer', 'base64', 'url').required(); // Exactly one of these must be present
+```
+
+## Error Handling in Storage
+
+### Storage-Specific Error Handling
+```typescript
+// CORRECT - Storage-specific error handling
+public async uploadFile(fileName: string, buffer: Buffer): Promise<string> {
+  try {
+    const result = await this.storageClient.upload(fileName, buffer);
+    return result;
+  } catch (error) {
+    this.logger.error(`Storage upload failed: ${error.message}`);
+    
+    if (error.code === 'NoSuchBucket') {
+      throw new BadRequestException('Storage bucket not found');
+    }
+    
+    if (error.code === 'AccessDenied') {
+      throw new UnauthorizedException('Storage access denied');
+    }
+    
+    if (error.code === 'EntityTooLarge') {
+      throw new BadRequestException('File too large');
+    }
+    
+    throw new InternalServerErrorException('Storage operation failed');
+  }
+}
+```
+
+## Storage Configuration Pattern
+
+### Environment Configuration
+```typescript
+export interface S3Config {
+  ENABLE: boolean;
+  ENDPOINT: string;
+  PORT: number;
+  USE_SSL: boolean;
+  ACCESS_KEY: string;
+  SECRET_KEY: string;
+  REGION: string;
+  BUCKET: string;
+}
+
+// Usage in service
+const s3Config = this.configService.get<S3Config>('S3');
+if (!s3Config.ENABLE) {
+  throw new BadRequestException('S3 storage is disabled');
+}
+```
+
+## Storage Testing Pattern
+
+### Storage Service Testing
+```typescript
+describe('S3Service', () => {
+  let service: S3Service;
+  let prismaRepository: jest.Mocked<PrismaRepository>;
+
+  beforeEach(() => {
+    service = new S3Service(prismaRepository);
+  });
+
+  describe('getMedia', () => {
+    it('should return media list', async () => {
+      const instance = { instanceId: 'test-instance' };
+      const mockMedia = [
+        { id: '1', fileName: 'test.jpg', type: 'image', mimetype: 'image/jpeg' },
+      ];
+
+      prismaRepository.media.findMany.mockResolvedValue(mockMedia);
+
+      const result = await service.getMedia(instance);
+
+      expect(result).toEqual(mockMedia);
+      expect(prismaRepository.media.findMany).toHaveBeenCalledWith({
+        where: { instanceId: 'test-instance' },
+        select: expect.objectContaining({
+          id: true,
+          fileName: true,
+          type: true,
+          mimetype: true,
+        }),
+      });
+    });
+
+    it('should throw error when no media found', async () => {
+      const instance = { instanceId: 'test-instance' };
+      prismaRepository.media.findMany.mockResolvedValue([]);
+
+      await expect(service.getMedia(instance)).rejects.toThrow(BadRequestException);
+    });
+  });
+});
+```
+
+## Storage Performance Considerations
+
+### Efficient File Handling
+```typescript
+// CORRECT - Stream-based upload for large files
+public async uploadLargeFile(fileName: string, stream: Readable, size: number): Promise<string> {
+  const uploadStream = new Transform({
+    transform(chunk, encoding, callback) {
+      // Optional: Add compression, encryption, etc.
+      callback(null, chunk);
+    },
+  });
+
+  return new Promise((resolve, reject) => {
+    stream
+      .pipe(uploadStream)
+      .on('error', reject)
+      .on('finish', () => resolve(fileName));
+  });
+}
+
+// INCORRECT - Loading entire file into memory
+public async uploadLargeFile(fileName: string, filePath: string): Promise<string> {
+  const buffer = fs.readFileSync(filePath); // ❌ Memory intensive for large files
+  return await this.uploadFile(fileName, buffer);
+}
+```

@@ -1,3 +1,4 @@
+import { configService, Telemetry } from '@config/env.config';
 import axios from 'axios';
 import fs from 'fs';
 
@@ -10,9 +11,9 @@ export interface TelemetryData {
 }
 
 export const sendTelemetry = async (route: string): Promise<void> => {
-  const enabled = process.env.TELEMETRY_ENABLED === undefined || process.env.TELEMETRY_ENABLED === 'true';
+  const telemetryConfig = configService.get<Telemetry>('TELEMETRY');
 
-  if (!enabled) {
+  if (!telemetryConfig.ENABLED) {
     return;
   }
 
@@ -27,9 +28,7 @@ export const sendTelemetry = async (route: string): Promise<void> => {
   };
 
   const url =
-    process.env.TELEMETRY_URL && process.env.TELEMETRY_URL !== ''
-      ? process.env.TELEMETRY_URL
-      : 'https://log.evolution-api.com/telemetry';
+    telemetryConfig.URL && telemetryConfig.URL !== '' ? telemetryConfig.URL : 'https://log.evolution-api.com/telemetry';
 
   axios
     .post(url, telemetry)

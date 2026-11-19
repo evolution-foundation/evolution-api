@@ -1,0 +1,552 @@
+---
+description: Channel integration patterns for Evolution API
+globs:
+  - "src/api/integrations/channel/**/*.ts"
+alwaysApply: false
+---
+
+# Evolution API Channel Integration Rules
+
+## Channel Controller Pattern
+
+### Base Channel Controller
+```typescript
+export interface ChannelControllerInterface {
+  integrationEnabled: boolean;
+}
+
+export class ChannelController {
+  public prismaRepository: PrismaRepository;
+  public waMonitor: WAMonitoringService;
+
+  constructor(prismaRepository: PrismaRepository, waMonitor: WAMonitoringService) {
+    this.prisma = prismaRepository;
+    this.monitor = waMonitor;
+  }
+
+  public set prisma(prisma: PrismaRepository) {
+    this.prismaRepository = prisma;
+  }
+
+  public get prisma() {
+    return this.prismaRepository;
+  }
+
+  public set monitor(waMonitor: WAMonitoringService) {
+    this.waMonitor = waMonitor;
+  }
+
+  public get monitor() {
+    return this.waMonitor;
+  }
+
+  public init(instanceData: InstanceDto, data: ChannelDataType) {
+    if (!instanceData.token && instanceData.integration === Integration.WHATSAPP_BUSINESS) {
+      throw new BadRequestException('token is required');
+    }
+
+    if (instanceData.integration === Integration.WHATSAPP_BUSINESS) {
+      return new BusinessStartupService(/* dependencies */);
+    }
+
+    if (instanceData.integration === Integration.EVOLUTION) {
+      return new EvolutionStartupService(/* dependencies */);
+    }
+
+    if (instanceData.integration === Integration.WHATSAPP_BAILEYS) {
+      return new BaileysStartupService(/* dependencies */);
+    }
+
+    return null;
+  }
+}
+```
+
+### Extended Channel Controller
+```typescript
+export class EvolutionController extends ChannelController implements ChannelControllerInterface {
+  private readonly logger = new Logger('EvolutionController');
+
+  constructor(prismaRepository: PrismaRepository, waMonitor: WAMonitoringService) {
+    super(prismaRepository, waMonitor);
+  }
+
+  integrationEnabled: boolean;
+
+  public async receiveWebhook(data: any) {
+    const numberId = data.numberId;
+
+    if (!numberId) {
+      this.logger.error('WebhookService -> receiveWebhookEvolution -> numberId not found');
+      return;
+    }
+
+    const instance = await this.prismaRepository.instance.findFirst({
+      where: { number: numberId },
+    });
+
+    if (!instance) {
+      this.logger.error('WebhookService -> receiveWebhook -> instance not found');
+      return;
+    }
+
+    await this.waMonitor.waInstances[instance.name].connectToWhatsapp(data);
+
+    return {
+      status: 'success',
+    };
+  }
+}
+```
+
+## Channel Service Pattern
+
+### Base Channel Service
+```typescript
+export class ChannelStartupService {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly eventEmitter: EventEmitter2,
+    private readonly prismaRepository: PrismaRepository,
+    public readonly cache: CacheService,
+    public readonly chatwootCache: CacheService,
+  ) {}
+
+  public readonly logger = new Logger('ChannelStartupService');
+
+  public client: WASocket;
+  public readonly instance: wa.Instance = {};
+  public readonly localChatwoot: wa.LocalChatwoot = {};
+  public readonly localProxy: wa.LocalProxy = {};
+  public readonly localSettings: wa.LocalSettings = {};
+  public readonly localWebhook: wa.LocalWebHook = {};
+
+  public setInstance(instance: InstanceDto) {
+    this.logger.setInstance(instance.instanceName);
+
+    this.instance.name = instance.instanceName;
+    this.instance.id = instance.instanceId;
+    this.instance.integration = instance.integration;
+    this.instance.number = instance.number;
+    this.instance.token = instance.token;
+    this.instance.businessId = instance.businessId;
+
+    if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
+      this.chatwootService.eventWhatsapp(
+        Events.STATUS_INSTANCE,
+        { instanceName: this.instance.name },
+        {
+          instance: this.instance.name,
+          status: 'created',
+        },
+      );
+    }
+  }
+
+  public set instanceName(name: string) {
+    this.logger.setInstance(name);
+    this.instance.name = name;
+  }
+
+  public get instanceName() {
+    return this.instance.name;
+  }
+}
+```
+
+### Extended Channel Service
+```typescript
+export class EvolutionStartupService extends ChannelStartupService {
+  constructor(
+    configService: ConfigService,
+    eventEmitter: EventEmitter2,
+    prismaRepository: PrismaRepository,
+    cache: CacheService,
+    chatwootCache: CacheService,
+  ) {
+    super(configService, eventEmitter, prismaRepository, cache, chatwootCache);
+  }
+
+  public async sendMessage(data: SendTextDto): Promise<any> {
+    // Evolution-specific message sending logic
+    const response = await this.evolutionApiCall('/send-message', data);
+    return response;
+  }
+
+  public async connectToWhatsapp(data: any): Promise<void> {
+    // Evolution-specific connection logic
+    this.logger.log('Connecting to Evolution API');
+    
+    // Set up webhook listeners
+    this.setupWebhookHandlers();
+    
+    // Initialize connection
+    await this.initializeConnection(data);
+  }
+
+  private async evolutionApiCall(endpoint: string, data: any): Promise<any> {
+    const config = this.configService.get<Evolution>('EVOLUTION');
+    
+    try {
+      const response = await axios.post(`${config.API_URL}${endpoint}`, data, {
+        headers: {
+          'Authorization': `Bearer ${this.instance.token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Evolution API call failed: ${error.message}`);
+      throw new InternalServerErrorException('Evolution API call failed');
+    }
+  }
+
+  private setupWebhookHandlers(): void {
+    // Set up webhook event handlers
+  }
+
+  private async initializeConnection(data: any): Promise<void> {
+    // Initialize connection with Evolution API
+  }
+}
+```
+
+## Business API Service Pattern
+
+### Meta Business Service
+```typescript
+export class BusinessStartupService extends ChannelStartupService {
+  constructor(
+    configService: ConfigService,
+    eventEmitter: EventEmitter2,
+    prismaRepository: PrismaRepository,
+    cache: CacheService,
+    chatwootCache: CacheService,
+    baileysCache: CacheService,
+    providerFiles: ProviderFiles,
+  ) {
+    super(configService, eventEmitter, prismaRepository, cache, chatwootCache);
+  }
+
+  public async sendMessage(data: SendTextDto): Promise<any> {
+    const businessConfig = this.configService.get<WaBusiness>('WA_BUSINESS');
+    
+    const payload = {
+      messaging_product: 'whatsapp',
+      to: data.number,
+      type: 'text',
+      text: {
+        body: data.text,
+      },
+    };
+
+    try {
+      const response = await axios.post(
+        `${businessConfig.URL}/${businessConfig.VERSION}/${this.instance.businessId}/messages`,
+        payload,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.instance.token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Business API call failed: ${error.message}`);
+      throw new BadRequestException('Failed to send message via Business API');
+    }
+  }
+
+  public async receiveWebhook(data: any): Promise<void> {
+    // Process incoming webhook from Meta Business API
+    const { entry } = data;
+    
+    for (const entryItem of entry) {
+      const { changes } = entryItem;
+      
+      for (const change of changes) {
+        if (change.field === 'messages') {
+          await this.processMessage(change.value);
+        }
+      }
+    }
+  }
+
+  private async processMessage(messageData: any): Promise<void> {
+    // Process incoming message from Business API
+    const { messages, contacts } = messageData;
+    
+    if (messages) {
+      for (const message of messages) {
+        await this.handleIncomingMessage(message, contacts);
+      }
+    }
+  }
+
+  private async handleIncomingMessage(message: any, contacts: any[]): Promise<void> {
+    // Handle individual message
+    const contact = contacts?.find(c => c.wa_id === message.from);
+    
+    // Emit event for message processing
+    this.eventEmitter.emit(Events.MESSAGES_UPSERT, {
+      instanceName: this.instance.name,
+      message,
+      contact,
+    });
+  }
+}
+```
+
+## Baileys Service Pattern
+
+### Baileys Integration Service
+```typescript
+export class BaileysStartupService extends ChannelStartupService {
+  constructor(
+    configService: ConfigService,
+    eventEmitter: EventEmitter2,
+    prismaRepository: PrismaRepository,
+    cache: CacheService,
+    chatwootCache: CacheService,
+    baileysCache: CacheService,
+    providerFiles: ProviderFiles,
+  ) {
+    super(configService, eventEmitter, prismaRepository, cache, chatwootCache);
+  }
+
+  public async connectToWhatsapp(): Promise<void> {
+    const authPath = path.join(INSTANCE_DIR, this.instance.name);
+    const { state, saveCreds } = await useMultiFileAuthState(authPath);
+
+    this.client = makeWASocket({
+      auth: state,
+      logger: P({ level: 'error' }),
+      printQRInTerminal: false,
+      browser: ['Evolution API', 'Chrome', '4.0.0'],
+      defaultQueryTimeoutMs: 60000,
+    });
+
+    this.setupEventHandlers();
+    this.client.ev.on('creds.update', saveCreds);
+  }
+
+  private setupEventHandlers(): void {
+    this.client.ev.on('connection.update', (update) => {
+      this.handleConnectionUpdate(update);
+    });
+
+    this.client.ev.on('messages.upsert', ({ messages, type }) => {
+      this.handleIncomingMessages(messages, type);
+    });
+
+    this.client.ev.on('messages.update', (updates) => {
+      this.handleMessageUpdates(updates);
+    });
+
+    this.client.ev.on('contacts.upsert', (contacts) => {
+      this.handleContactsUpdate(contacts);
+    });
+
+    this.client.ev.on('chats.upsert', (chats) => {
+      this.handleChatsUpdate(chats);
+    });
+  }
+
+  private async handleConnectionUpdate(update: ConnectionUpdate): Promise<void> {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      this.instance.qrcode = {
+        count: this.instance.qrcode?.count ? this.instance.qrcode.count + 1 : 1,
+        base64: qr,
+      };
+
+      this.eventEmitter.emit(Events.QRCODE_UPDATED, {
+        instanceName: this.instance.name,
+        qrcode: this.instance.qrcode,
+      });
+    }
+
+    if (connection === 'close') {
+      const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+      
+      if (shouldReconnect) {
+        this.logger.log('Connection closed, reconnecting...');
+        await this.connectToWhatsapp();
+      } else {
+        this.logger.log('Connection closed, logged out');
+        this.eventEmitter.emit(Events.LOGOUT_INSTANCE, {
+          instanceName: this.instance.name,
+        });
+      }
+    }
+
+    if (connection === 'open') {
+      this.logger.log('Connection opened successfully');
+      this.instance.wuid = this.client.user?.id;
+      
+      this.eventEmitter.emit(Events.CONNECTION_UPDATE, {
+        instanceName: this.instance.name,
+        state: 'open',
+      });
+    }
+  }
+
+  public async sendMessage(data: SendTextDto): Promise<any> {
+    const jid = createJid(data.number);
+    
+    const message = {
+      text: data.text,
+    };
+
+    if (data.linkPreview !== undefined) {
+      message.linkPreview = data.linkPreview;
+    }
+
+    if (data.mentionsEveryOne) {
+      // Handle mentions
+    }
+
+    try {
+      const response = await this.client.sendMessage(jid, message);
+      return response;
+    } catch (error) {
+      this.logger.error(`Failed to send message: ${error.message}`);
+      throw new BadRequestException('Failed to send message');
+    }
+  }
+}
+```
+
+## Channel Router Pattern
+
+### Channel Router Structure
+```typescript
+export class ChannelRouter {
+  public readonly router: Router;
+
+  constructor(configService: any, ...guards: any[]) {
+    this.router = Router();
+
+    this.router.use('/', new EvolutionRouter(configService).router);
+    this.router.use('/', new MetaRouter(configService).router);
+    this.router.use('/baileys', new BaileysRouter(...guards).router);
+  }
+}
+```
+
+### Specific Channel Router
+```typescript
+export class EvolutionRouter extends RouterBroker {
+  constructor(private readonly configService: ConfigService) {
+    super();
+    this.router
+      .post(this.routerPath('webhook'), async (req, res) => {
+        const response = await evolutionController.receiveWebhook(req.body);
+        return res.status(HttpStatus.OK).json(response);
+      });
+  }
+
+  public readonly router: Router = Router();
+}
+```
+
+## Integration Types
+
+### Channel Data Types
+```typescript
+type ChannelDataType = {
+  configService: ConfigService;
+  eventEmitter: EventEmitter2;
+  prismaRepository: PrismaRepository;
+  cache: CacheService;
+  chatwootCache: CacheService;
+  baileysCache: CacheService;
+  providerFiles: ProviderFiles;
+};
+
+export enum Integration {
+  WHATSAPP_BUSINESS = 'WHATSAPP-BUSINESS',
+  WHATSAPP_BAILEYS = 'WHATSAPP-BAILEYS',
+  EVOLUTION = 'EVOLUTION',
+}
+```
+
+## Error Handling in Channels
+
+### Channel-Specific Error Handling
+```typescript
+// CORRECT - Channel-specific error handling
+public async sendMessage(data: SendTextDto): Promise<any> {
+  try {
+    const response = await this.channelSpecificSend(data);
+    return response;
+  } catch (error) {
+    this.logger.error(`${this.constructor.name} send failed: ${error.message}`);
+    
+    if (error.response?.status === 401) {
+      throw new UnauthorizedException('Invalid token for channel');
+    }
+    
+    if (error.response?.status === 429) {
+      throw new BadRequestException('Rate limit exceeded');
+    }
+    
+    throw new InternalServerErrorException('Channel communication failed');
+  }
+}
+```
+
+## Channel Testing Pattern
+
+### Channel Service Testing
+```typescript
+describe('EvolutionStartupService', () => {
+  let service: EvolutionStartupService;
+  let configService: jest.Mocked<ConfigService>;
+  let eventEmitter: jest.Mocked<EventEmitter2>;
+
+  beforeEach(() => {
+    const mockConfig = {
+      get: jest.fn().mockReturnValue({
+        API_URL: 'https://api.evolution.com',
+      }),
+    };
+
+    service = new EvolutionStartupService(
+      mockConfig as any,
+      eventEmitter,
+      prismaRepository,
+      cache,
+      chatwootCache,
+    );
+  });
+
+  describe('sendMessage', () => {
+    it('should send message successfully', async () => {
+      const data = { number: '5511999999999', text: 'Test message' };
+      
+      // Mock axios response
+      jest.spyOn(axios, 'post').mockResolvedValue({
+        data: { success: true, messageId: '123' },
+      });
+
+      const result = await service.sendMessage(data);
+
+      expect(result.success).toBe(true);
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('/send-message'),
+        data,
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'Authorization': expect.stringContaining('Bearer'),
+          }),
+        })
+      );
+    });
+  });
+});
+```

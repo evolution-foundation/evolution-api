@@ -47,6 +47,7 @@ export class NatsController extends EventController implements EventControllerIn
     sender,
     apiKey,
     integration,
+    extra,
   }: EmitData): Promise<void> {
     if (integration && !integration.includes('nats')) {
       return;
@@ -65,6 +66,7 @@ export class NatsController extends EventController implements EventControllerIn
     const logEnabled = configService.get<Log>('LOG').LEVEL.includes('WEBHOOKS');
 
     const message = {
+      ...(extra ?? {}),
       event,
       instance: instanceName,
       data,

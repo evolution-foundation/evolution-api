@@ -31,16 +31,9 @@ module.exports = {
     'import/no-duplicates': 'error',
     'simple-import-sort/imports': 'error',
     'simple-import-sort/exports': 'error',
-    '@typescript-eslint/ban-types': [
-      'error',
-      {
-        extendDefaults: true,
-        types: {
-          '{}': false,
-          Object: false,
-        },
-      },
-    ],
+    '@typescript-eslint/no-empty-object-type': 'off',
+    '@typescript-eslint/no-wrapper-object-types': 'off',
+    '@typescript-eslint/no-unused-expressions': 'off',
     'prettier/prettier': ['error', { endOfLine: 'auto' }],
   },
 };

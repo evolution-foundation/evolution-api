@@ -1,0 +1,498 @@
+---
+description: Validation schemas and patterns for Evolution API
+globs:
+  - "src/validate/**/*.ts"
+alwaysApply: false
+---
+
+# Evolution API Validation Rules
+
+## Validation Schema Structure
+
+### JSONSchema7 Pattern (Evolution API Standard)
+```typescript
+import { JSONSchema7 } from 'json-schema';
+import { v4 } from 'uuid';
+
+const isNotEmpty = (...fields: string[]) => {
+  const properties = {};
+  fields.forEach((field) => {
+    properties[field] = {
+      if: { properties: { [field]: { type: 'string' } } },
+      then: { properties: { [field]: { minLength: 1 } } },
+    };
+  });
+
+  return {
+    allOf: Object.values(properties),
+  };
+};
+
+export const exampleSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    description: { type: 'string' },
+    enabled: { type: 'boolean' },
+    settings: {
+      type: 'object',
+      properties: {
+        timeout: { type: 'number', minimum: 1000, maximum: 60000 },
+        retries: { type: 'number', minimum: 0, maximum: 5 },
+      },
+    },
+    tags: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+  },
+  required: ['name', 'enabled'],
+  ...isNotEmpty('name'),
+};
+```
+
+## Message Validation Schemas
+
+### Send Message Validation
+```typescript
+const numberDefinition = {
+  type: 'string',
+  pattern: '^\\d+[\\.@\\w-]+',
+  description: 'Invalid number',
+};
+
+export const sendTextSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    number: numberDefinition,
+    text: { type: 'string', minLength: 1, maxLength: 4096 },
+    delay: { type: 'number', minimum: 0, maximum: 60000 },
+    linkPreview: { type: 'boolean' },
+    mentionsEveryOne: { type: 'boolean' },
+    mentioned: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+  },
+  required: ['number', 'text'],
+  ...isNotEmpty('number', 'text'),
+};
+
+export const sendMediaSchema = Joi.object({
+  number: Joi.string().required().pattern(/^\d+$/),
+  mediatype: Joi.string().required().valid('image', 'video', 'audio', 'document'),
+  media: Joi.alternatives().try(
+    Joi.string().uri(),
+    Joi.string().base64(),
+  ).required(),
+  caption: Joi.string().optional().max(1024),
+  fileName: Joi.string().optional().max(255),
+  delay: Joi.number().optional().min(0).max(60000),
+}).required();
+
+export const sendButtonsSchema = Joi.object({
+  number: Joi.string().required().pattern(/^\d+$/),
+  title: Joi.string().required().max(1024),
+  description: Joi.string().optional().max(1024),
+  footer: Joi.string().optional().max(60),
+  buttons: Joi.array().items(
+    Joi.object({
+      type: Joi.string().required().valid('replyButton', 'urlButton', 'callButton'),
+      displayText: Joi.string().required().max(20),
+      id: Joi.string().when('type', {
+        is: 'replyButton',
+        then: Joi.required().max(256),
+        otherwise: Joi.optional(),
+      }),
+      url: Joi.string().when('type', {
+        is: 'urlButton',
+        then: Joi.required().uri(),
+        otherwise: Joi.optional(),
+      }),
+      phoneNumber: Joi.string().when('type', {
+        is: 'callButton',
+        then: Joi.required().pattern(/^\+?\d+$/),
+        otherwise: Joi.optional(),
+      }),
+    })
+  ).min(1).max(3).required(),
+}).required();
+```
+
+## Instance Validation Schemas
+
+### Instance Creation Validation
+```typescript
+export const instanceSchema = Joi.object({
+  instanceName: Joi.string().required().min(1).max(100).pattern(/^[a-zA-Z0-9_-]+$/),
+  integration: Joi.string().required().valid('WHATSAPP-BAILEYS', 'WHATSAPP-BUSINESS', 'EVOLUTION'),
+  token: Joi.string().when('integration', {
+    is: Joi.valid('WHATSAPP-BUSINESS', 'EVOLUTION'),
+    then: Joi.required().min(10),
+    otherwise: Joi.optional(),
+  }),
+  qrcode: Joi.boolean().optional().default(false),
+  number: Joi.string().optional().pattern(/^\d+$/),
+  businessId: Joi.string().when('integration', {
+    is: 'WHATSAPP-BUSINESS',
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+}).required();
+
+export const settingsSchema = Joi.object({
+  rejectCall: Joi.boolean().optional(),
+  msgCall: Joi.string().optional().max(500),
+  groupsIgnore: Joi.boolean().optional(),
+  alwaysOnline: Joi.boolean().optional(),
+  readMessages: Joi.boolean().optional(),
+  readStatus: Joi.boolean().optional(),
+  syncFullHistory: Joi.boolean().optional(),
+  wavoipToken: Joi.string().optional(),
+}).optional();
+
+export const proxySchema = Joi.object({
+  host: Joi.string().required().hostname(),
+  port: Joi.string().required().pattern(/^\d+$/).custom((value) => {
+    const port = parseInt(value);
+    if (port < 1 || port > 65535) {
+      throw new Error('Port must be between 1 and 65535');
+    }
+    return value;
+  }),
+  protocol: Joi.string().required().valid('http', 'https', 'socks4', 'socks5'),
+  username: Joi.string().optional(),
+  password: Joi.string().optional(),
+}).optional();
+```
+
+## Webhook Validation Schemas
+
+### Webhook Configuration Validation
+```typescript
+export const webhookSchema = Joi.object({
+  enabled: Joi.boolean().required(),
+  url: Joi.string().when('enabled', {
+    is: true,
+    then: Joi.required().uri({ scheme: ['http', 'https'] }),
+    otherwise: Joi.optional(),
+  }),
+  events: Joi.array().items(
+    Joi.string().valid(
+      'APPLICATION_STARTUP',
+      'INSTANCE_CREATE',
+      'INSTANCE_DELETE',
+      'QRCODE_UPDATED',
+      'CONNECTION_UPDATE',
+      'STATUS_INSTANCE',
+      'MESSAGES_SET',
+      'MESSAGES_UPSERT',
+      'MESSAGES_UPDATE',
+      'MESSAGES_DELETE',
+      'CONTACTS_SET',
+      'CONTACTS_UPSERT',
+      'CONTACTS_UPDATE',
+      'CHATS_SET',
+      'CHATS_UPDATE',
+      'CHATS_UPSERT',
+      'CHATS_DELETE',
+      'GROUPS_UPSERT',
+      'GROUPS_UPDATE',
+      'GROUP_PARTICIPANTS_UPDATE',
+      'CALL'
+    )
+  ).min(1).when('enabled', {
+    is: true,
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  headers: Joi.object().pattern(
+    Joi.string(),
+    Joi.string()
+  ).optional(),
+  byEvents: Joi.boolean().optional().default(false),
+  base64: Joi.boolean().optional().default(false),
+}).required();
+```
+
+## Chatbot Validation Schemas
+
+### Base Chatbot Validation
+```typescript
+export const baseChatbotSchema = Joi.object({
+  enabled: Joi.boolean().required(),
+  description: Joi.string().required().min(1).max(500),
+  expire: Joi.number().optional().min(0).max(86400), // 24 hours in seconds
+  keywordFinish: Joi.string().optional().max(100),
+  delayMessage: Joi.number().optional().min(0).max(10000),
+  unknownMessage: Joi.string().optional().max(1000),
+  listeningFromMe: Joi.boolean().optional().default(false),
+  stopBotFromMe: Joi.boolean().optional().default(false),
+  keepOpen: Joi.boolean().optional().default(false),
+  debounceTime: Joi.number().optional().min(0).max(60000),
+  triggerType: Joi.string().required().valid('ALL', 'KEYWORD', 'REGEX'),
+  triggerOperator: Joi.string().when('triggerType', {
+    is: 'KEYWORD',
+    then: Joi.required().valid('EQUALS', 'CONTAINS', 'STARTS_WITH', 'ENDS_WITH'),
+    otherwise: Joi.optional(),
+  }),
+  triggerValue: Joi.string().when('triggerType', {
+    is: Joi.valid('KEYWORD', 'REGEX'),
+    then: Joi.required().min(1).max(500),
+    otherwise: Joi.optional(),
+  }),
+  ignoreJids: Joi.array().items(Joi.string()).optional(),
+  splitMessages: Joi.boolean().optional().default(false),
+  timePerChar: Joi.number().optional().min(10).max(1000).default(100),
+}).required();
+
+export const typebotSchema = baseChatbotSchema.keys({
+  url: Joi.string().required().uri({ scheme: ['http', 'https'] }),
+  typebot: Joi.string().required().min(1).max(100),
+  apiVersion: Joi.string().optional().valid('v1', 'v2').default('v1'),
+}).required();
+
+export const openaiSchema = baseChatbotSchema.keys({
+  apiKey: Joi.string().required().min(10),
+  model: Joi.string().optional().valid(
+    'gpt-3.5-turbo',
+    'gpt-3.5-turbo-16k',
+    'gpt-4',
+    'gpt-4-32k',
+    'gpt-4-turbo-preview'
+  ).default('gpt-3.5-turbo'),
+  systemMessage: Joi.string().optional().max(2000),
+  maxTokens: Joi.number().optional().min(1).max(4000).default(1000),
+  temperature: Joi.number().optional().min(0).max(2).default(0.7),
+}).required();
+```
+
+## Business API Validation Schemas
+
+### Template Validation
+```typescript
+export const templateSchema = Joi.object({
+  name: Joi.string().required().min(1).max(512).pattern(/^[a-z0-9_]+$/),
+  category: Joi.string().required().valid('MARKETING', 'UTILITY', 'AUTHENTICATION'),
+  allowCategoryChange: Joi.boolean().required(),
+  language: Joi.string().required().pattern(/^[a-z]{2}_[A-Z]{2}$/), // e.g., pt_BR, en_US
+  components: Joi.array().items(
+    Joi.object({
+      type: Joi.string().required().valid('HEADER', 'BODY', 'FOOTER', 'BUTTONS'),
+      format: Joi.string().when('type', {
+        is: 'HEADER',
+        then: Joi.valid('TEXT', 'IMAGE', 'VIDEO', 'DOCUMENT'),
+        otherwise: Joi.optional(),
+      }),
+      text: Joi.string().when('type', {
+        is: Joi.valid('HEADER', 'BODY', 'FOOTER'),
+        then: Joi.required().min(1).max(1024),
+        otherwise: Joi.optional(),
+      }),
+      buttons: Joi.array().when('type', {
+        is: 'BUTTONS',
+        then: Joi.items(
+          Joi.object({
+            type: Joi.string().required().valid('QUICK_REPLY', 'URL', 'PHONE_NUMBER'),
+            text: Joi.string().required().min(1).max(25),
+            url: Joi.string().when('type', {
+              is: 'URL',
+              then: Joi.required().uri(),
+              otherwise: Joi.optional(),
+            }),
+            phone_number: Joi.string().when('type', {
+              is: 'PHONE_NUMBER',
+              then: Joi.required().pattern(/^\+?\d+$/),
+              otherwise: Joi.optional(),
+            }),
+          })
+        ).min(1).max(10),
+        otherwise: Joi.optional(),
+      }),
+    })
+  ).min(1).required(),
+  webhookUrl: Joi.string().optional().uri({ scheme: ['http', 'https'] }),
+}).required();
+
+export const catalogSchema = Joi.object({
+  number: Joi.string().optional().pattern(/^\d+$/),
+  limit: Joi.number().optional().min(1).max(1000).default(10),
+  cursor: Joi.string().optional(),
+}).optional();
+```
+
+## Group Validation Schemas
+
+### Group Management Validation
+```typescript
+export const createGroupSchema = Joi.object({
+  subject: Joi.string().required().min(1).max(100),
+  description: Joi.string().optional().max(500),
+  participants: Joi.array().items(
+    Joi.string().pattern(/^\d+$/)
+  ).min(1).max(256).required(),
+  promoteParticipants: Joi.boolean().optional().default(false),
+}).required();
+
+export const updateGroupSchema = Joi.object({
+  subject: Joi.string().optional().min(1).max(100),
+  description: Joi.string().optional().max(500),
+}).min(1).required();
+
+export const groupParticipantsSchema = Joi.object({
+  participants: Joi.array().items(
+    Joi.string().pattern(/^\d+$/)
+  ).min(1).max(50).required(),
+  action: Joi.string().required().valid('add', 'remove', 'promote', 'demote'),
+}).required();
+```
+
+## Label Validation Schemas
+
+### Label Management Validation
+```typescript
+export const labelSchema = Joi.object({
+  name: Joi.string().required().min(1).max(100),
+  color: Joi.string().required().pattern(/^#[0-9A-Fa-f]{6}$/), // Hex color
+  predefinedId: Joi.string().optional(),
+}).required();
+
+export const handleLabelSchema = Joi.object({
+  number: Joi.string().required().pattern(/^\d+$/),
+  labelId: Joi.string().required(),
+  action: Joi.string().required().valid('add', 'remove'),
+}).required();
+```
+
+## Custom Validation Functions
+
+### Phone Number Validation
+```typescript
+export function validatePhoneNumber(number: string): boolean {
+  // Remove any non-digit characters
+  const cleaned = number.replace(/\D/g, '');
+  
+  // Check minimum and maximum length
+  if (cleaned.length < 10 || cleaned.length > 15) {
+    return false;
+  }
+  
+  // Check for valid country codes (basic validation)
+  const validCountryCodes = ['1', '7', '20', '27', '30', '31', '32', '33', '34', '36', '39', '40', '41', '43', '44', '45', '46', '47', '48', '49', '51', '52', '53', '54', '55', '56', '57', '58', '60', '61', '62', '63', '64', '65', '66', '81', '82', '84', '86', '90', '91', '92', '93', '94', '95', '98'];
+  
+  // Check if starts with valid country code
+  const startsWithValidCode = validCountryCodes.some(code => cleaned.startsWith(code));
+  
+  return startsWithValidCode;
+}
+
+export const phoneNumberValidator = Joi.string().custom((value, helpers) => {
+  if (!validatePhoneNumber(value)) {
+    return helpers.error('any.invalid');
+  }
+  return value;
+}, 'Phone number validation');
+```
+
+### Base64 Validation
+```typescript
+export function validateBase64(base64: string): boolean {
+  try {
+    // Check if it's a valid base64 string
+    const decoded = Buffer.from(base64, 'base64').toString('base64');
+    return decoded === base64;
+  } catch {
+    return false;
+  }
+}
+
+export const base64Validator = Joi.string().custom((value, helpers) => {
+  if (!validateBase64(value)) {
+    return helpers.error('any.invalid');
+  }
+  return value;
+}, 'Base64 validation');
+```
+
+### URL Validation with Protocol Check
+```typescript
+export function validateWebhookUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return ['http:', 'https:'].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+export const webhookUrlValidator = Joi.string().custom((value, helpers) => {
+  if (!validateWebhookUrl(value)) {
+    return helpers.error('any.invalid');
+  }
+  return value;
+}, 'Webhook URL validation');
+```
+
+## Validation Error Handling
+
+### Error Message Customization
+```typescript
+export const validationMessages = {
+  'any.required': 'O campo {#label} é obrigatório',
+  'string.empty': 'O campo {#label} não pode estar vazio',
+  'string.min': 'O campo {#label} deve ter pelo menos {#limit} caracteres',
+  'string.max': 'O campo {#label} deve ter no máximo {#limit} caracteres',
+  'string.pattern.base': 'O campo {#label} possui formato inválido',
+  'number.min': 'O campo {#label} deve ser maior ou igual a {#limit}',
+  'number.max': 'O campo {#label} deve ser menor ou igual a {#limit}',
+  'array.min': 'O campo {#label} deve ter pelo menos {#limit} itens',
+  'array.max': 'O campo {#label} deve ter no máximo {#limit} itens',
+  'any.only': 'O campo {#label} deve ser um dos valores: {#valids}',
+};
+
+export function formatValidationError(error: Joi.ValidationError): any {
+  return {
+    message: 'Dados de entrada inválidos',
+    details: error.details.map(detail => ({
+      field: detail.path.join('.'),
+      message: detail.message,
+      value: detail.context?.value,
+    })),
+  };
+}
+```
+
+## Schema Composition
+
+### Reusable Schema Components
+```typescript
+export const commonFields = {
+  instanceName: Joi.string().required().min(1).max(100).pattern(/^[a-zA-Z0-9_-]+$/),
+  number: phoneNumberValidator.required(),
+  delay: Joi.number().optional().min(0).max(60000),
+  enabled: Joi.boolean().optional().default(true),
+};
+
+export const mediaFields = {
+  mediatype: Joi.string().required().valid('image', 'video', 'audio', 'document'),
+  media: Joi.alternatives().try(
+    Joi.string().uri(),
+    base64Validator,
+  ).required(),
+  caption: Joi.string().optional().max(1024),
+  fileName: Joi.string().optional().max(255),
+};
+
+// Compose schemas using common fields
+export const quickMessageSchema = Joi.object({
+  ...commonFields,
+  text: Joi.string().required().min(1).max(4096),
+}).required();
+
+export const quickMediaSchema = Joi.object({
+  ...commonFields,
+  ...mediaFields,
+}).required();
+```

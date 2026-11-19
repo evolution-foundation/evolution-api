@@ -1,10 +1,11 @@
+import { configService, EventEmitter as EventEmitterConfig } from '@config/env.config';
 import EventEmitter2 from 'eventemitter2';
 
-const maxListeners = parseInt(process.env.EVENT_EMITTER_MAX_LISTENERS, 10) || 50;
+const eventEmitterConfig = configService.get<EventEmitterConfig>('EVENT_EMITTER');
 
 export const eventEmitter = new EventEmitter2({
   delimiter: '.',
   newListener: false,
   ignoreErrors: false,
-  maxListeners: maxListeners,
+  maxListeners: eventEmitterConfig.MAX_LISTENERS,
 });

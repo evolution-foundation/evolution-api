@@ -71,7 +71,7 @@ export const useVoiceCallsBaileys = async (
 
   socket.on('assertSessions', async (jids, force, callback) => {
     try {
-      const response = await baileys_sock.assertSessions(jids, force);
+      const response = await baileys_sock.assertSessions(jids);
 
       callback(response);
 

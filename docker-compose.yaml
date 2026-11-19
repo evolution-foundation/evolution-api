@@ -1,83 +1,84 @@
+version: "3.8"
+
 services:
-  
   api:
     container_name: evolution_api
     image: evoapicloud/evolution-api:latest
     restart: always
     depends_on:
       - redis
-      - postgres
+      - evolution-postgres
     ports:
-      - 8080:8080
+      - "127.0.0.1:8080:8080"
     volumes:
       - evolution_instances:/evolution/instances
     networks:
       - evolution-net
+      - dokploy-network
     env_file:
       - .env
     expose:
-      - 8080
+      - "8080"
 
-  redis:
-    image: redis:latest
+  frontend:
+    container_name: evolution_frontend
+    image: evoapicloud/evolution-manager:latest
+    restart: always
+    ports:
+      - "3000:80"
     networks:
       - evolution-net
-    container_name: redis
+
+  redis:
+    container_name: evolution_redis
+    image: redis:latest
+    restart: always
     command: >
       redis-server --port 6379 --appendonly yes
     volumes:
       - evolution_redis:/data
-    ports:
-      - 6379:6379
+    networks:
+      evolution-net:
+        aliases:
+          - evolution-redis
+      dokploy-network:
+        aliases:
+          - evolution-redis
+    expose:
+      - "6379"
 
-  postgres:
-    container_name: postgres
+  evolution-postgres:
+    container_name: evolution_postgres
     image: postgres:15
+    restart: always
+    env_file:
+      - .env
+    command:
+      - postgres
+      - -c
+      - max_connections=1000
+      - -c
+      - listen_addresses=*
+    environment:
+      - POSTGRES_DB=${POSTGRES_DATABASE}
+      - POSTGRES_USER=${POSTGRES_USERNAME}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     networks:
       - evolution-net
-    command: [
-      "postgres",
-      "-c", "max_connections=200",
-      "-c", "listen_addresses=*",
-      "-c", "shared_buffers=256MB",
-      "-c", "effective_cache_size=1GB",
-      "-c", "work_mem=4MB"
-    ]
-    restart: always
-    ports:
-      - 5432:5432
-    environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=pass
-      - POSTGRES_DB=evolution_db
-      - POSTGRES_HOST_AUTH_METHOD=trust
-    volumes:
-    - postgres_data:/var/lib/postgresql/data
-
-  # pgbouncer:
-  #   image: edoburu/pgbouncer:latest
-  #   environment:
-  #     DB_HOST: postgres
-  #     DB_USER: user
-  #     DB_PASSWORD: pass
-  #     POOL_MODE: transaction
-  #     AUTH_TYPE: trust
-  #     MAX_CLIENT_CONN: 1000
-  #     DEFAULT_POOL_SIZE: 25
-  #   depends_on:
-  #     - postgres
-  #   ports:
-  #     - "6543:5432"
-  #   networks:
-  #     - evolution-net
+      - dokploy-network
+    expose:
+      - "5432"
 
 volumes:
   evolution_instances:
   evolution_redis:
   postgres_data:
 
-
 networks:
   evolution-net:
     name: evolution-net
     driver: bridge
+  dokploy-network:
+    external: true

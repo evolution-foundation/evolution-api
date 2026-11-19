@@ -53,7 +53,7 @@ export class LocalCache implements ICache {
 
   async hGet(key: string, field: string) {
     try {
-      const data = LocalCache.localCache.get(this.buildKey(key)) as Object;
+      const data = LocalCache.localCache.get(this.buildKey(key)) as object;
 
       if (data && field in data) {
         return JSON.parse(data[field], BufferJSON.reviver);
@@ -84,7 +84,7 @@ export class LocalCache implements ICache {
 
   async hDelete(key: string, field: string) {
     try {
-      const data = LocalCache.localCache.get(this.buildKey(key)) as Object;
+      const data = LocalCache.localCache.get(this.buildKey(key)) as object;
 
       if (data && field in data) {
         delete data[field];

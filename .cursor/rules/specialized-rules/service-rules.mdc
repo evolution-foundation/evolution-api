@@ -1,0 +1,294 @@
+---
+description: Service layer patterns for Evolution API
+globs:
+  - "src/api/services/**/*.ts"
+  - "src/api/integrations/**/services/*.ts"
+alwaysApply: false
+---
+
+# Evolution API Service Rules
+
+## Service Structure Pattern
+
+### Standard Service Class
+```typescript
+export class ExampleService {
+  constructor(private readonly waMonitor: WAMonitoringService) {}
+
+  private readonly logger = new Logger('ExampleService');
+
+  public async create(instance: InstanceDto, data: ExampleDto) {
+    await this.waMonitor.waInstances[instance.instanceName].setData(data);
+    return { example: { ...instance, data } };
+  }
+
+  public async find(instance: InstanceDto): Promise<ExampleDto> {
+    try {
+      const result = await this.waMonitor.waInstances[instance.instanceName].findData();
+
+      if (Object.keys(result).length === 0) {
+        throw new Error('Data not found');
+      }
+
+      return result;
+    } catch (error) {
+      return null; // Evolution pattern - return null on error
+    }
+  }
+}
+```
+
+## Dependency Injection Pattern
+
+### Constructor Pattern
+```typescript
+// CORRECT - Evolution API pattern
+constructor(
+  private readonly waMonitor: WAMonitoringService,
+  private readonly prismaRepository: PrismaRepository,
+  private readonly configService: ConfigService,
+) {}
+
+// INCORRECT - Don't use
+constructor(waMonitor, prismaRepository, configService) {} // ❌ No types
+```
+
+## Logger Pattern
+
+### Standard Logger Usage
+```typescript
+// CORRECT - Evolution API pattern
+private readonly logger = new Logger('ServiceName');
+
+// Usage
+this.logger.log('Operation started');
+this.logger.error('Operation failed', error);
+
+// INCORRECT
+console.log('Operation started'); // ❌ Use Logger
+```
+
+## WAMonitor Integration Pattern
+
+### Instance Access Pattern
+```typescript
+// CORRECT - Standard pattern
+public async operation(instance: InstanceDto, data: DataDto) {
+  await this.waMonitor.waInstances[instance.instanceName].performAction(data);
+  return { result: { ...instance, data } };
+}
+
+// Instance validation
+const waInstance = this.waMonitor.waInstances[instance.instanceName];
+if (!waInstance) {
+  throw new NotFoundException('Instance not found');
+}
+```
+
+## Error Handling Pattern
+
+### Try-Catch Pattern
+```typescript
+// CORRECT - Evolution API pattern
+public async find(instance: InstanceDto): Promise<DataDto> {
+  try {
+    const result = await this.waMonitor.waInstances[instance.instanceName].findData();
+    
+    if (Object.keys(result).length === 0) {
+      throw new Error('Data not found');
+    }
+
+    return result;
+  } catch (error) {
+    this.logger.error('Find operation failed', error);
+    return null; // Return null on error (Evolution pattern)
+  }
+}
+```
+
+## Cache Integration Pattern
+
+### Cache Service Usage
+```typescript
+export class CacheAwareService {
+  constructor(
+    private readonly cache: CacheService,
+    private readonly chatwootCache: CacheService,
+    private readonly baileysCache: CacheService,
+  ) {}
+
+  public async getCachedData(key: string): Promise<any> {
+    const cached = await this.cache.get(key);
+    if (cached) return cached;
+
+    const data = await this.fetchFromSource(key);
+    await this.cache.set(key, data, 300); // 5 min TTL
+    return data;
+  }
+}
+```
+
+## Integration Service Patterns
+
+### Chatbot Service Base Pattern
+```typescript
+export class ChatbotService extends BaseChatbotService<BotType, SettingsType> {
+  constructor(
+    waMonitor: WAMonitoringService,
+    prismaRepository: PrismaRepository,
+    configService: ConfigService,
+  ) {
+    super(waMonitor, prismaRepository, 'ChatbotService', configService);
+  }
+
+  protected async processBot(
+    waInstance: any,
+    remoteJid: string,
+    bot: BotType,
+    session: any,
+    settings: any,
+    content: string,
+  ): Promise<void> {
+    // Implementation
+  }
+}
+```
+
+### Channel Service Pattern
+```typescript
+export class ChannelService extends ChannelStartupService {
+  constructor(
+    configService: ConfigService,
+    eventEmitter: EventEmitter2,
+    prismaRepository: PrismaRepository,
+    cache: CacheService,
+    chatwootCache: CacheService,
+    baileysCache: CacheService,
+  ) {
+    super(configService, eventEmitter, prismaRepository, cache, chatwootCache, baileysCache);
+  }
+
+  public readonly logger = new Logger('ChannelService');
+  public client: WASocket;
+  public readonly instance: wa.Instance = {};
+}
+```
+
+## Service Initialization Pattern
+
+### Service Registration
+```typescript
+// In server.module.ts pattern
+export const templateService = new TemplateService(
+  waMonitor,
+  prismaRepository,
+  configService,
+);
+
+export const settingsService = new SettingsService(waMonitor);
+```
+
+## Async Operation Patterns
+
+### Promise Handling
+```typescript
+// CORRECT - Evolution API pattern
+public async sendMessage(instance: InstanceDto, data: MessageDto) {
+  const waInstance = this.waMonitor.waInstances[instance.instanceName];
+  return await waInstance.sendMessage(data);
+}
+
+// INCORRECT - Don't use .then()
+public sendMessage(instance: InstanceDto, data: MessageDto) {
+  return this.waMonitor.waInstances[instance.instanceName]
+    .sendMessage(data)
+    .then(result => result); // ❌ Use async/await
+}
+```
+
+## Configuration Access Pattern
+
+### Config Service Usage
+```typescript
+// CORRECT - Evolution API pattern
+const serverConfig = this.configService.get<HttpServer>('SERVER');
+const authConfig = this.configService.get<Auth>('AUTHENTICATION');
+const dbConfig = this.configService.get<Database>('DATABASE');
+
+// Type-safe configuration access
+if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED) {
+  // Chatwoot logic
+}
+```
+
+## Event Emission Pattern
+
+### EventEmitter2 Usage
+```typescript
+// CORRECT - Evolution API pattern
+this.eventEmitter.emit(Events.INSTANCE_CREATE, {
+  instanceName: instance.name,
+  status: 'created',
+});
+
+// Chatwoot event pattern
+if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
+  this.chatwootService.eventWhatsapp(
+    Events.STATUS_INSTANCE,
+    { instanceName: this.instance.name },
+    {
+      instance: this.instance.name,
+      status: 'created',
+    },
+  );
+}
+```
+
+## Service Method Naming
+
+### Standard Method Names
+- `create()` - Create new resource
+- `find()` - Find single resource
+- `findAll()` - Find multiple resources
+- `update()` - Update resource
+- `delete()` - Delete resource
+- `fetch*()` - Fetch from external API
+- `send*()` - Send data/messages
+- `process*()` - Process data
+
+## Service Testing Pattern
+
+### Unit Test Structure
+```typescript
+describe('ExampleService', () => {
+  let service: ExampleService;
+  let waMonitor: jest.Mocked<WAMonitoringService>;
+  let prismaRepository: jest.Mocked<PrismaRepository>;
+
+  beforeEach(() => {
+    const mockWaMonitor = {
+      waInstances: {
+        'test-instance': {
+          performAction: jest.fn(),
+        },
+      },
+    };
+
+    service = new ExampleService(
+      mockWaMonitor as any,
+      prismaRepository,
+      configService,
+    );
+  });
+
+  it('should perform action successfully', async () => {
+    const instance = { instanceName: 'test-instance' };
+    const data = { test: 'data' };
+
+    const result = await service.create(instance, data);
+
+    expect(result).toBeDefined();
+    expect(waMonitor.waInstances['test-instance'].performAction).toHaveBeenCalledWith(data);
+  });
+});
+```

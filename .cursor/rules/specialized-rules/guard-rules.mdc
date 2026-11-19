@@ -1,0 +1,416 @@
+---
+description: Guard patterns for authentication and authorization in Evolution API
+globs:
+  - "src/api/guards/**/*.ts"
+alwaysApply: false
+---
+
+# Evolution API Guard Rules
+
+## Guard Structure Pattern
+
+### Standard Guard Function
+```typescript
+import { NextFunction, Request, Response } from 'express';
+import { Logger } from '@config/logger.config';
+import { UnauthorizedException, ForbiddenException } from '@exceptions';
+
+const logger = new Logger('GUARD');
+
+async function guardFunction(req: Request, _: Response, next: NextFunction) {
+  // Guard logic here
+  
+  if (validationFails) {
+    throw new UnauthorizedException();
+  }
+  
+  return next();
+}
+
+export const guardName = { guardFunction };
+```
+
+## Authentication Guard Pattern
+
+### API Key Authentication
+```typescript
+async function apikey(req: Request, _: Response, next: NextFunction) {
+  const env = configService.get<Auth>('AUTHENTICATION').API_KEY;
+  const key = req.get('apikey');
+  const db = configService.get<Database>('DATABASE');
+
+  if (!key) {
+    throw new UnauthorizedException();
+  }
+
+  // Global API key check
+  if (env.KEY === key) {
+    return next();
+  }
+
+  // Special routes handling
+  if ((req.originalUrl.includes('/instance/create') || req.originalUrl.includes('/instance/fetchInstances')) && !key) {
+    throw new ForbiddenException('Missing global api key', 'The global api key must be set');
+  }
+
+  const param = req.params as unknown as InstanceDto;
+
+  try {
+    if (param?.instanceName) {
+      const instance = await prismaRepository.instance.findUnique({
+        where: { name: param.instanceName },
+      });
+      if (instance.token === key) {
+        return next();
+      }
+    } else {
+      if (req.originalUrl.includes('/instance/fetchInstances') && db.SAVE_DATA.INSTANCE) {
+        const instanceByKey = await prismaRepository.instance.findFirst({
+          where: { token: key },
+        });
+        if (instanceByKey) {
+          return next();
+        }
+      }
+    }
+  } catch (error) {
+    logger.error(error);
+  }
+
+  throw new UnauthorizedException();
+}
+
+export const authGuard = { apikey };
+```
+
+## Instance Validation Guards
+
+### Instance Exists Guard
+```typescript
+async function getInstance(instanceName: string) {
+  try {
+    const cacheConf = configService.get<CacheConf>('CACHE');
+
+    const exists = !!waMonitor.waInstances[instanceName];
+
+    if (cacheConf.REDIS.ENABLED && cacheConf.REDIS.SAVE_INSTANCES) {
+      const keyExists = await cache.has(instanceName);
+      return exists || keyExists;
+    }
+
+    return exists || (await prismaRepository.instance.findMany({ where: { name: instanceName } })).length > 0;
+  } catch (error) {
+    throw new InternalServerErrorException(error?.toString());
+  }
+}
+
+export async function instanceExistsGuard(req: Request, _: Response, next: NextFunction) {
+  if (req.originalUrl.includes('/instance/create')) {
+    return next();
+  }
+
+  const param = req.params as unknown as InstanceDto;
+  if (!param?.instanceName) {
+    throw new BadRequestException('"instanceName" not provided.');
+  }
+
+  if (!(await getInstance(param.instanceName))) {
+    throw new NotFoundException(`The "${param.instanceName}" instance does not exist`);
+  }
+
+  next();
+}
+```
+
+### Instance Logged Guard
+```typescript
+export async function instanceLoggedGuard(req: Request, _: Response, next: NextFunction) {
+  if (req.originalUrl.includes('/instance/create')) {
+    const instance = req.body as InstanceDto;
+    if (await getInstance(instance.instanceName)) {
+      throw new ForbiddenException(`This name "${instance.instanceName}" is already in use.`);
+    }
+
+    if (waMonitor.waInstances[instance.instanceName]) {
+      delete waMonitor.waInstances[instance.instanceName];
+    }
+  }
+
+  next();
+}
+```
+
+## Telemetry Guard Pattern
+
+### Telemetry Collection
+```typescript
+class Telemetry {
+  public collectTelemetry(req: Request, res: Response, next: NextFunction): void {
+    // Collect telemetry data
+    const telemetryData = {
+      route: req.originalUrl,
+      method: req.method,
+      timestamp: new Date(),
+      userAgent: req.get('User-Agent'),
+    };
+
+    // Send telemetry asynchronously (don't block request)
+    setImmediate(() => {
+      this.sendTelemetry(telemetryData);
+    });
+
+    next();
+  }
+
+  private async sendTelemetry(data: any): Promise<void> {
+    try {
+      // Send telemetry data
+    } catch (error) {
+      // Silently fail - don't affect main request
+    }
+  }
+}
+
+export default Telemetry;
+```
+
+## Guard Composition Pattern
+
+### Multiple Guards Usage
+```typescript
+// In router setup
+const guards = [instanceExistsGuard, instanceLoggedGuard, authGuard['apikey']];
+
+router
+  .use('/instance', new InstanceRouter(configService, ...guards).router)
+  .use('/message', new MessageRouter(...guards).router)
+  .use('/chat', new ChatRouter(...guards).router);
+```
+
+## Error Handling in Guards
+
+### Proper Exception Throwing
+```typescript
+// CORRECT - Use proper HTTP exceptions
+if (!apiKey) {
+  throw new UnauthorizedException('API key required');
+}
+
+if (instanceExists) {
+  throw new ForbiddenException('Instance already exists');
+}
+
+if (!instanceFound) {
+  throw new NotFoundException('Instance not found');
+}
+
+if (validationFails) {
+  throw new BadRequestException('Invalid request parameters');
+}
+
+// INCORRECT - Don't use generic Error
+if (!apiKey) {
+  throw new Error('API key required'); // ❌ Use specific exceptions
+}
+```
+
+## Configuration Access in Guards
+
+### Config Service Usage
+```typescript
+async function configAwareGuard(req: Request, _: Response, next: NextFunction) {
+  const authConfig = configService.get<Auth>('AUTHENTICATION');
+  const cacheConfig = configService.get<CacheConf>('CACHE');
+  const dbConfig = configService.get<Database>('DATABASE');
+
+  // Use configuration for guard logic
+  if (authConfig.API_KEY.KEY === providedKey) {
+    return next();
+  }
+
+  throw new UnauthorizedException();
+}
+```
+
+## Database Access in Guards
+
+### Prisma Repository Usage
+```typescript
+async function databaseGuard(req: Request, _: Response, next: NextFunction) {
+  try {
+    const param = req.params as unknown as InstanceDto;
+    
+    const instance = await prismaRepository.instance.findUnique({
+      where: { name: param.instanceName },
+    });
+
+    if (!instance) {
+      throw new NotFoundException('Instance not found');
+    }
+
+    // Additional validation logic
+    if (instance.status !== 'active') {
+      throw new ForbiddenException('Instance not active');
+    }
+
+    return next();
+  } catch (error) {
+    logger.error('Database guard error:', error);
+    throw new InternalServerErrorException('Database access failed');
+  }
+}
+```
+
+## Cache Integration in Guards
+
+### Cache Service Usage
+```typescript
+async function cacheAwareGuard(req: Request, _: Response, next: NextFunction) {
+  const cacheConf = configService.get<CacheConf>('CACHE');
+  
+  if (cacheConf.REDIS.ENABLED) {
+    const cached = await cache.get(`guard:${req.params.instanceName}`);
+    if (cached) {
+      // Use cached validation result
+      return next();
+    }
+  }
+
+  // Perform validation and cache result
+  const isValid = await performValidation(req.params.instanceName);
+  
+  if (cacheConf.REDIS.ENABLED) {
+    await cache.set(`guard:${req.params.instanceName}`, isValid, 300); // 5 min TTL
+  }
+
+  if (isValid) {
+    return next();
+  }
+
+  throw new UnauthorizedException();
+}
+```
+
+## Logging in Guards
+
+### Structured Logging
+```typescript
+const logger = new Logger('GUARD');
+
+async function loggedGuard(req: Request, _: Response, next: NextFunction) {
+  logger.log(`Guard validation started for ${req.originalUrl}`);
+
+  try {
+    // Guard logic
+    const isValid = await validateRequest(req);
+    
+    if (isValid) {
+      logger.log(`Guard validation successful for ${req.params.instanceName}`);
+      return next();
+    }
+
+    logger.warn(`Guard validation failed for ${req.params.instanceName}`);
+    throw new UnauthorizedException();
+  } catch (error) {
+    logger.error(`Guard validation error: ${error.message}`, error.stack);
+    throw error;
+  }
+}
+```
+
+## Guard Testing Pattern
+
+### Unit Test Structure
+```typescript
+describe('authGuard', () => {
+  let req: Partial<Request>;
+  let res: Partial<Response>;
+  let next: NextFunction;
+
+  beforeEach(() => {
+    req = {
+      get: jest.fn(),
+      params: {},
+      originalUrl: '/test',
+    };
+    res = {};
+    next = jest.fn();
+  });
+
+  describe('apikey', () => {
+    it('should pass with valid global API key', async () => {
+      (req.get as jest.Mock).mockReturnValue('valid-global-key');
+      
+      await authGuard.apikey(req as Request, res as Response, next);
+      
+      expect(next).toHaveBeenCalled();
+    });
+
+    it('should throw UnauthorizedException with no API key', async () => {
+      (req.get as jest.Mock).mockReturnValue(undefined);
+      
+      await expect(
+        authGuard.apikey(req as Request, res as Response, next)
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should pass with valid instance token', async () => {
+      (req.get as jest.Mock).mockReturnValue('instance-token');
+      req.params = { instanceName: 'test-instance' };
+      
+      // Mock prisma repository
+      jest.spyOn(prismaRepository.instance, 'findUnique').mockResolvedValue({
+        token: 'instance-token',
+      } as any);
+      
+      await authGuard.apikey(req as Request, res as Response, next);
+      
+      expect(next).toHaveBeenCalled();
+    });
+  });
+});
+```
+
+## Guard Performance Considerations
+
+### Efficient Validation
+```typescript
+// CORRECT - Efficient guard with early returns
+async function efficientGuard(req: Request, _: Response, next: NextFunction) {
+  // Quick checks first
+  if (req.originalUrl.includes('/public')) {
+    return next(); // Skip validation for public routes
+  }
+
+  const apiKey = req.get('apikey');
+  if (!apiKey) {
+    throw new UnauthorizedException(); // Fail fast
+  }
+
+  // More expensive checks only if needed
+  if (apiKey === globalKey) {
+    return next(); // Skip database check
+  }
+
+  // Database check only as last resort
+  const isValid = await validateInDatabase(apiKey);
+  if (isValid) {
+    return next();
+  }
+
+  throw new UnauthorizedException();
+}
+
+// INCORRECT - Inefficient guard
+async function inefficientGuard(req: Request, _: Response, next: NextFunction) {
+  // Always do expensive database check first
+  const dbResult = await expensiveDatabaseQuery(); // ❌ Expensive operation first
+  
+  const apiKey = req.get('apikey');
+  if (!apiKey && dbResult) { // ❌ Complex logic
+    throw new UnauthorizedException();
+  }
+  
+  next();
+}
+```

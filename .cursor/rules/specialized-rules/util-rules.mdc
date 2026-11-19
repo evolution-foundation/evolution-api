@@ -1,0 +1,653 @@
+---
+description: Utility functions and helpers for Evolution API
+globs:
+  - "src/utils/**/*.ts"
+alwaysApply: false
+---
+
+# Evolution API Utility Rules
+
+## Utility Function Structure
+
+### Standard Utility Pattern
+```typescript
+import { Logger } from '@config/logger.config';
+
+const logger = new Logger('UtilityName');
+
+export function utilityFunction(param: ParamType): ReturnType {
+  try {
+    // Utility logic
+    return result;
+  } catch (error) {
+    logger.error(`Utility function failed: ${error.message}`);
+    throw error;
+  }
+}
+
+export default utilityFunction;
+```
+
+## Authentication Utilities
+
+### Multi-File Auth State Pattern
+```typescript
+import { AuthenticationState } from 'baileys';
+import { CacheService } from '@api/services/cache.service';
+import fs from 'fs/promises';
+import path from 'path';
+
+export default async function useMultiFileAuthStatePrisma(
+  sessionId: string,
+  cache: CacheService,
+): Promise<{
+  state: AuthenticationState;
+  saveCreds: () => Promise<void>;
+}> {
+  const localFolder = path.join(INSTANCE_DIR, sessionId);
+  const localFile = (key: string) => path.join(localFolder, fixFileName(key) + '.json');
+  await fs.mkdir(localFolder, { recursive: true });
+
+  async function writeData(data: any, key: string): Promise<any> {
+    const dataString = JSON.stringify(data, BufferJSON.replacer);
+
+    if (key !== 'creds') {
+      if (process.env.CACHE_REDIS_ENABLED === 'true') {
+        return await cache.hSet(sessionId, key, data);
+      } else {
+        await fs.writeFile(localFile(key), dataString);
+        return;
+      }
+    }
+    await saveKey(sessionId, dataString);
+    return;
+  }
+
+  async function readData(key: string): Promise<any> {
+    try {
+      let rawData;
+
+      if (key !== 'creds') {
+        if (process.env.CACHE_REDIS_ENABLED === 'true') {
+          return await cache.hGet(sessionId, key);
+        } else {
+          if (!(await fileExists(localFile(key)))) return null;
+          rawData = await fs.readFile(localFile(key), { encoding: 'utf-8' });
+          return JSON.parse(rawData, BufferJSON.reviver);
+        }
+      } else {
+        rawData = await getAuthKey(sessionId);
+      }
+
+      const parsedData = JSON.parse(rawData, BufferJSON.reviver);
+      return parsedData;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async function removeData(key: string): Promise<any> {
+    try {
+      if (key !== 'creds') {
+        if (process.env.CACHE_REDIS_ENABLED === 'true') {
+          return await cache.hDelete(sessionId, key);
+        } else {
+          await fs.unlink(localFile(key));
+        }
+      } else {
+        await deleteAuthKey(sessionId);
+      }
+    } catch (error) {
+      return;
+    }
+  }
+
+  let creds = await readData('creds');
+  if (!creds) {
+    creds = initAuthCreds();
+    await writeData(creds, 'creds');
+  }
+
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type, ids) => {
+          const data = {};
+          await Promise.all(
+            ids.map(async (id) => {
+              let value = await readData(`${type}-${id}`);
+              if (type === 'app-state-sync-key' && value) {
+                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+              }
+              data[id] = value;
+            })
+          );
+          return data;
+        },
+        set: async (data) => {
+          const tasks = [];
+          for (const category in data) {
+            for (const id in data[category]) {
+              const value = data[category][id];
+              const key = `${category}-${id}`;
+              tasks.push(value ? writeData(value, key) : removeData(key));
+            }
+          }
+          await Promise.all(tasks);
+        },
+      },
+    },
+    saveCreds: () => writeData(creds, 'creds'),
+  };
+}
+```
+
+## Message Processing Utilities
+
+### Message Content Extraction
+```typescript
+export const getConversationMessage = (msg: any): string => {
+  const types = getTypeMessage(msg);
+  const messageContent = getMessageContent(types);
+  return messageContent;
+};
+
+const getTypeMessage = (msg: any): any => {
+  return Object.keys(msg?.message || msg || {})[0];
+};
+
+const getMessageContent = (type: string, msg?: any): string => {
+  const typeKey = type?.replace('Message', '');
+  
+  const types = {
+    conversation: msg?.message?.conversation,
+    extendedTextMessage: msg?.message?.extendedTextMessage?.text,
+    imageMessage: msg?.message?.imageMessage?.caption || 'Image',
+    videoMessage: msg?.message?.videoMessage?.caption || 'Video',
+    audioMessage: 'Audio',
+    documentMessage: msg?.message?.documentMessage?.caption || 'Document',
+    stickerMessage: 'Sticker',
+    contactMessage: 'Contact',
+    locationMessage: 'Location',
+    liveLocationMessage: 'Live Location',
+    viewOnceMessage: 'View Once',
+    reactionMessage: 'Reaction',
+    pollCreationMessage: 'Poll',
+    pollUpdateMessage: 'Poll Update',
+  };
+
+  let result = types[typeKey] || types[type] || 'Unknown';
+  
+  if (!result || result === 'Unknown') {
+    result = JSON.stringify(msg);
+  }
+
+  return result;
+};
+```
+
+### JID Creation Utility
+```typescript
+export const createJid = (number: string): string => {
+  if (number.includes('@')) {
+    return number;
+  }
+
+  // Remove any non-numeric characters except +
+  let cleanNumber = number.replace(/[^\d+]/g, '');
+  
+  // Remove + if present
+  if (cleanNumber.startsWith('+')) {
+    cleanNumber = cleanNumber.substring(1);
+  }
+
+  // Add country code if missing (assuming Brazil as default)
+  if (cleanNumber.length === 11 && cleanNumber.startsWith('11')) {
+    cleanNumber = '55' + cleanNumber;
+  } else if (cleanNumber.length === 10) {
+    cleanNumber = '5511' + cleanNumber;
+  }
+
+  // Determine if it's a group or individual
+  const isGroup = cleanNumber.includes('-');
+  const domain = isGroup ? 'g.us' : 's.whatsapp.net';
+
+  return `${cleanNumber}@${domain}`;
+};
+```
+
+## Cache Utilities
+
+### WhatsApp Number Cache
+```typescript
+interface ISaveOnWhatsappCacheParams {
+  remoteJid: string;
+  lid?: string;
+}
+
+function getAvailableNumbers(remoteJid: string): string[] {
+  const numbersAvailable: string[] = [];
+
+  if (remoteJid.startsWith('+')) {
+    remoteJid = remoteJid.slice(1);
+  }
+
+  const [number, domain] = remoteJid.split('@');
+
+  // Brazilian numbers
+  if (remoteJid.startsWith('55')) {
+    const numberWithDigit =
+      number.slice(4, 5) === '9' && number.length === 13 ? number : `${number.slice(0, 4)}9${number.slice(4)}`;
+    const numberWithoutDigit = number.length === 12 ? number : number.slice(0, 4) + number.slice(5);
+
+    numbersAvailable.push(numberWithDigit);
+    numbersAvailable.push(numberWithoutDigit);
+  }
+  // Mexican/Argentina numbers
+  else if (number.startsWith('52') || number.startsWith('54')) {
+    let prefix = '';
+    if (number.startsWith('52')) {
+      prefix = '1';
+    }
+    if (number.startsWith('54')) {
+      prefix = '9';
+    }
+
+    const numberWithDigit =
+      number.slice(2, 3) === prefix && number.length === 13
+        ? number
+        : `${number.slice(0, 2)}${prefix}${number.slice(2)}`;
+    const numberWithoutDigit = number.length === 12 ? number : number.slice(0, 2) + number.slice(3);
+
+    numbersAvailable.push(numberWithDigit);
+    numbersAvailable.push(numberWithoutDigit);
+  }
+  // Other countries
+  else {
+    numbersAvailable.push(remoteJid);
+  }
+
+  return numbersAvailable.map((number) => `${number}@${domain}`);
+}
+
+export async function saveOnWhatsappCache(params: ISaveOnWhatsappCacheParams): Promise<void> {
+  const { remoteJid, lid } = params;
+  const db = configService.get<Database>('DATABASE');
+
+  if (!db.SAVE_DATA.CONTACTS) {
+    return;
+  }
+
+  try {
+    const numbersAvailable = getAvailableNumbers(remoteJid);
+    
+    const existingContact = await prismaRepository.contact.findFirst({
+      where: {
+        OR: numbersAvailable.map(number => ({ id: number })),
+      },
+    });
+
+    if (!existingContact) {
+      await prismaRepository.contact.create({
+        data: {
+          id: remoteJid,
+          pushName: '',
+          profilePicUrl: '',
+          isOnWhatsapp: true,
+          lid: lid || null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+    } else {
+      await prismaRepository.contact.update({
+        where: { id: existingContact.id },
+        data: {
+          isOnWhatsapp: true,
+          lid: lid || existingContact.lid,
+          updatedAt: new Date(),
+        },
+      });
+    }
+  } catch (error) {
+    console.error('Error saving WhatsApp cache:', error);
+  }
+}
+```
+
+## Search Utilities
+
+### Advanced Search Operators
+```typescript
+function normalizeString(str: string): string {
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+export function advancedOperatorsSearch(data: string, query: string): boolean {
+  const normalizedData = normalizeString(data);
+  const normalizedQuery = normalizeString(query);
+
+  // Exact phrase search with quotes
+  if (normalizedQuery.startsWith('"') && normalizedQuery.endsWith('"')) {
+    const phrase = normalizedQuery.slice(1, -1);
+    return normalizedData.includes(phrase);
+  }
+
+  // OR operator
+  if (normalizedQuery.includes(' OR ')) {
+    const terms = normalizedQuery.split(' OR ');
+    return terms.some(term => normalizedData.includes(term.trim()));
+  }
+
+  // AND operator (default behavior)
+  if (normalizedQuery.includes(' AND ')) {
+    const terms = normalizedQuery.split(' AND ');
+    return terms.every(term => normalizedData.includes(term.trim()));
+  }
+
+  // NOT operator
+  if (normalizedQuery.startsWith('NOT ')) {
+    const term = normalizedQuery.slice(4);
+    return !normalizedData.includes(term);
+  }
+
+  // Wildcard search
+  if (normalizedQuery.includes('*')) {
+    const regex = new RegExp(normalizedQuery.replace(/\*/g, '.*'), 'i');
+    return regex.test(normalizedData);
+  }
+
+  // Default: simple contains search
+  return normalizedData.includes(normalizedQuery);
+}
+```
+
+## Proxy Utilities
+
+### Proxy Agent Creation
+```typescript
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { SocksProxyAgent } from 'socks-proxy-agent';
+
+type Proxy = {
+  host: string;
+  port: string;
+  protocol: 'http' | 'https' | 'socks4' | 'socks5';
+  username?: string;
+  password?: string;
+};
+
+function selectProxyAgent(proxyUrl: string): HttpsProxyAgent<string> | SocksProxyAgent {
+  const url = new URL(proxyUrl);
+  
+  if (url.protocol === 'socks4:' || url.protocol === 'socks5:') {
+    return new SocksProxyAgent(proxyUrl);
+  } else {
+    return new HttpsProxyAgent(proxyUrl);
+  }
+}
+
+export function makeProxyAgent(proxy: Proxy): HttpsProxyAgent<string> | SocksProxyAgent | null {
+  if (!proxy.host || !proxy.port) {
+    return null;
+  }
+
+  let proxyUrl = `${proxy.protocol}://`;
+  
+  if (proxy.username && proxy.password) {
+    proxyUrl += `${proxy.username}:${proxy.password}@`;
+  }
+  
+  proxyUrl += `${proxy.host}:${proxy.port}`;
+
+  try {
+    return selectProxyAgent(proxyUrl);
+  } catch (error) {
+    console.error('Failed to create proxy agent:', error);
+    return null;
+  }
+}
+```
+
+## Telemetry Utilities
+
+### Telemetry Data Collection
+```typescript
+export interface TelemetryData {
+  route: string;
+  apiVersion: string;
+  timestamp: Date;
+  method?: string;
+  statusCode?: number;
+  responseTime?: number;
+  userAgent?: string;
+  instanceName?: string;
+}
+
+export const sendTelemetry = async (route: string): Promise<void> => {
+  try {
+    const telemetryData: TelemetryData = {
+      route,
+      apiVersion: packageJson.version,
+      timestamp: new Date(),
+    };
+
+    // Only send telemetry if enabled
+    if (process.env.DISABLE_TELEMETRY === 'true') {
+      return;
+    }
+
+    // Send to telemetry service (implement as needed)
+    await axios.post('https://telemetry.evolution-api.com/collect', telemetryData, {
+      timeout: 5000,
+    });
+  } catch (error) {
+    // Silently fail - don't affect main application
+    console.debug('Telemetry failed:', error.message);
+  }
+};
+```
+
+## Internationalization Utilities
+
+### i18n Setup
+```typescript
+import { ConfigService, Language } from '@config/env.config';
+import fs from 'fs';
+import i18next from 'i18next';
+import path from 'path';
+
+const __dirname = path.resolve(process.cwd(), 'src', 'utils');
+const languages = ['en', 'pt-BR', 'es'];
+const translationsPath = path.join(__dirname, 'translations');
+const configService: ConfigService = new ConfigService();
+
+const resources: any = {};
+
+languages.forEach((language) => {
+  const languagePath = path.join(translationsPath, `${language}.json`);
+  if (fs.existsSync(languagePath)) {
+    const translationContent = fs.readFileSync(languagePath, 'utf8');
+    resources[language] = {
+      translation: JSON.parse(translationContent),
+    };
+  }
+});
+
+i18next.init({
+  resources,
+  fallbackLng: 'en',
+  lng: configService.get<Language>('LANGUAGE') || 'pt-BR',
+  interpolation: {
+    escapeValue: false,
+  },
+});
+
+export const t = i18next.t.bind(i18next);
+export default i18next;
+```
+
+## Bot Trigger Utilities
+
+### Bot Trigger Matching
+```typescript
+import { TriggerOperator, TriggerType } from '@prisma/client';
+
+export function findBotByTrigger(
+  bots: any[],
+  content: string,
+  remoteJid: string,
+): any | null {
+  for (const bot of bots) {
+    if (!bot.enabled) continue;
+    
+    // Check ignore list
+    if (bot.ignoreJids && bot.ignoreJids.includes(remoteJid)) {
+      continue;
+    }
+
+    // Check trigger
+    if (matchesTrigger(content, bot.triggerType, bot.triggerOperator, bot.triggerValue)) {
+      return bot;
+    }
+  }
+
+  return null;
+}
+
+function matchesTrigger(
+  content: string,
+  triggerType: TriggerType,
+  triggerOperator: TriggerOperator,
+  triggerValue: string,
+): boolean {
+  const normalizedContent = content.toLowerCase().trim();
+  const normalizedValue = triggerValue.toLowerCase().trim();
+
+  switch (triggerType) {
+    case TriggerType.ALL:
+      return true;
+
+    case TriggerType.KEYWORD:
+      return matchesKeyword(normalizedContent, triggerOperator, normalizedValue);
+
+    case TriggerType.REGEX:
+      try {
+        const regex = new RegExp(triggerValue, 'i');
+        return regex.test(content);
+      } catch {
+        return false;
+      }
+
+    default:
+      return false;
+  }
+}
+
+function matchesKeyword(
+  content: string,
+  operator: TriggerOperator,
+  value: string,
+): boolean {
+  switch (operator) {
+    case TriggerOperator.EQUALS:
+      return content === value;
+    case TriggerOperator.CONTAINS:
+      return content.includes(value);
+    case TriggerOperator.STARTS_WITH:
+      return content.startsWith(value);
+    case TriggerOperator.ENDS_WITH:
+      return content.endsWith(value);
+    default:
+      return false;
+  }
+}
+```
+
+## Server Utilities
+
+### Server Status Check
+```typescript
+export class ServerUP {
+  private static instance: ServerUP;
+  private isServerUp: boolean = false;
+
+  private constructor() {}
+
+  public static getInstance(): ServerUP {
+    if (!ServerUP.instance) {
+      ServerUP.instance = new ServerUP();
+    }
+    return ServerUP.instance;
+  }
+
+  public setServerStatus(status: boolean): void {
+    this.isServerUp = status;
+  }
+
+  public getServerStatus(): boolean {
+    return this.isServerUp;
+  }
+
+  public async waitForServer(timeout: number = 30000): Promise<boolean> {
+    const startTime = Date.now();
+    
+    while (!this.isServerUp && (Date.now() - startTime) < timeout) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    return this.isServerUp;
+  }
+}
+```
+
+## Error Response Utilities
+
+### Standardized Error Responses
+```typescript
+export function createMetaErrorResponse(error: any, context: string) {
+  const timestamp = new Date().toISOString();
+  
+  if (error.response?.data) {
+    return {
+      status: error.response.status || 500,
+      error: {
+        message: error.response.data.error?.message || 'External API error',
+        type: error.response.data.error?.type || 'api_error',
+        code: error.response.data.error?.code || 'unknown_error',
+        context,
+        timestamp,
+      },
+    };
+  }
+
+  return {
+    status: 500,
+    error: {
+      message: error.message || 'Internal server error',
+      type: 'internal_error',
+      code: 'server_error',
+      context,
+      timestamp,
+    },
+  };
+}
+
+export function createValidationErrorResponse(errors: any[], context: string) {
+  return {
+    status: 400,
+    error: {
+      message: 'Validation failed',
+      type: 'validation_error',
+      code: 'invalid_input',
+      context,
+      details: errors,
+      timestamp: new Date().toISOString(),
+    },
+  };
+}
+```

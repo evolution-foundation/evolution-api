@@ -1,0 +1,597 @@
+---
+description: Chatbot integration patterns for Evolution API
+globs:
+  - "src/api/integrations/chatbot/**/*.ts"
+alwaysApply: false
+---
+
+# Evolution API Chatbot Integration Rules
+
+## Base Chatbot Pattern
+
+### Base Chatbot DTO
+```typescript
+/**
+ * Base DTO for all chatbot integrations
+ * Contains common properties shared by all chatbot types
+ */
+export class BaseChatbotDto {
+  enabled?: boolean;
+  description: string;
+  expire?: number;
+  keywordFinish?: string;
+  delayMessage?: number;
+  unknownMessage?: string;
+  listeningFromMe?: boolean;
+  stopBotFromMe?: boolean;
+  keepOpen?: boolean;
+  debounceTime?: number;
+  triggerType: TriggerType;
+  triggerOperator?: TriggerOperator;
+  triggerValue?: string;
+  ignoreJids?: string[];
+  splitMessages?: boolean;
+  timePerChar?: number;
+}
+```
+
+### Base Chatbot Controller
+```typescript
+export abstract class BaseChatbotController<BotType = any, BotData extends BaseChatbotDto = BaseChatbotDto>
+  extends ChatbotController
+  implements ChatbotControllerInterface
+{
+  public readonly logger: Logger;
+  integrationEnabled: boolean;
+  botRepository: any;
+  settingsRepository: any;
+  sessionRepository: any;
+  userMessageDebounce: { [key: string]: { message: string; timeoutId: NodeJS.Timeout } } = {};
+
+  // Abstract methods to be implemented by specific chatbots
+  protected abstract readonly integrationName: string;
+  protected abstract processBot(
+    waInstance: any,
+    remoteJid: string,
+    bot: BotType,
+    session: any,
+    settings: ChatbotSettings,
+    content: string,
+    pushName?: string,
+    msg?: any,
+  ): Promise<void>;
+  protected abstract getFallbackBotId(settings: any): string | undefined;
+
+  constructor(prismaRepository: PrismaRepository, waMonitor: WAMonitoringService) {
+    super(prismaRepository, waMonitor);
+    this.sessionRepository = this.prismaRepository.integrationSession;
+  }
+
+  // Base implementation methods
+  public async createBot(instance: InstanceDto, data: BotData) {
+    if (!data.enabled) {
+      throw new BadRequestException(`${this.integrationName} is disabled`);
+    }
+
+    // Common bot creation logic
+    const bot = await this.botRepository.create({
+      data: {
+        ...data,
+        instanceId: instance.instanceId,
+      },
+    });
+
+    return bot;
+  }
+}
+```
+
+### Base Chatbot Service
+```typescript
+/**
+ * Base class for all chatbot service implementations
+ * Contains common methods shared across different chatbot integrations
+ */
+export abstract class BaseChatbotService<BotType = any, SettingsType = any> {
+  protected readonly logger: Logger;
+  protected readonly waMonitor: WAMonitoringService;
+  protected readonly prismaRepository: PrismaRepository;
+  protected readonly configService?: ConfigService;
+
+  constructor(
+    waMonitor: WAMonitoringService,
+    prismaRepository: PrismaRepository,
+    loggerName: string,
+    configService?: ConfigService,
+  ) {
+    this.waMonitor = waMonitor;
+    this.prismaRepository = prismaRepository;
+    this.logger = new Logger(loggerName);
+    this.configService = configService;
+  }
+
+  /**
+   * Check if a message contains an image
+   */
+  protected isImageMessage(content: string): boolean {
+    return content.includes('imageMessage');
+  }
+
+  /**
+   * Extract text content from message
+   */
+  protected getMessageContent(msg: any): string {
+    return getConversationMessage(msg);
+  }
+
+  /**
+   * Send typing indicator
+   */
+  protected async sendTyping(instanceName: string, remoteJid: string): Promise<void> {
+    await this.waMonitor.waInstances[instanceName].sendPresence(remoteJid, 'composing');
+  }
+}
+```
+
+## Typebot Integration Pattern
+
+### Typebot Service
+```typescript
+export class TypebotService extends BaseChatbotService<TypebotModel, any> {
+  constructor(
+    waMonitor: WAMonitoringService,
+    configService: ConfigService,
+    prismaRepository: PrismaRepository,
+    private readonly openaiService: OpenaiService,
+  ) {
+    super(waMonitor, prismaRepository, 'TypebotService', configService);
+  }
+
+  public async sendTypebotMessage(
+    instanceName: string,
+    remoteJid: string,
+    typebot: TypebotModel,
+    content: string,
+  ): Promise<void> {
+    try {
+      const response = await axios.post(
+        `${typebot.url}/api/v1/typebots/${typebot.typebot}/startChat`,
+        {
+          message: content,
+          sessionId: `${instanceName}-${remoteJid}`,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const { messages } = response.data;
+      
+      for (const message of messages) {
+        await this.processTypebotMessage(instanceName, remoteJid, message);
+      }
+    } catch (error) {
+      this.logger.error(`Typebot API error: ${error.message}`);
+      throw new InternalServerErrorException('Typebot communication failed');
+    }
+  }
+
+  private async processTypebotMessage(
+    instanceName: string,
+    remoteJid: string,
+    message: any,
+  ): Promise<void> {
+    const waInstance = this.waMonitor.waInstances[instanceName];
+    
+    if (message.type === 'text') {
+      await waInstance.sendMessage({
+        number: remoteJid.split('@')[0],
+        text: message.content.richText[0].children[0].text,
+      });
+    }
+    
+    if (message.type === 'image') {
+      await waInstance.sendMessage({
+        number: remoteJid.split('@')[0],
+        mediaMessage: {
+          mediatype: 'image',
+          media: message.content.url,
+        },
+      });
+    }
+  }
+}
+```
+
+## OpenAI Integration Pattern
+
+### OpenAI Service
+```typescript
+export class OpenaiService extends BaseChatbotService<OpenaiModel, any> {
+  constructor(
+    waMonitor: WAMonitoringService,
+    prismaRepository: PrismaRepository,
+    configService: ConfigService,
+  ) {
+    super(waMonitor, prismaRepository, 'OpenaiService', configService);
+  }
+
+  public async sendOpenaiMessage(
+    instanceName: string,
+    remoteJid: string,
+    openai: OpenaiModel,
+    content: string,
+    pushName?: string,
+  ): Promise<void> {
+    try {
+      const openaiConfig = this.configService.get<Openai>('OPENAI');
+      
+      const response = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: openai.model || 'gpt-3.5-turbo',
+          messages: [
+            {
+              role: 'system',
+              content: openai.systemMessage || 'You are a helpful assistant.',
+            },
+            {
+              role: 'user',
+              content: content,
+            },
+          ],
+          max_tokens: openai.maxTokens || 1000,
+          temperature: openai.temperature || 0.7,
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${openai.apiKey || openaiConfig.API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const aiResponse = response.data.choices[0].message.content;
+      
+      await this.waMonitor.waInstances[instanceName].sendMessage({
+        number: remoteJid.split('@')[0],
+        text: aiResponse,
+      });
+    } catch (error) {
+      this.logger.error(`OpenAI API error: ${error.message}`);
+      
+      // Send fallback message
+      await this.waMonitor.waInstances[instanceName].sendMessage({
+        number: remoteJid.split('@')[0],
+        text: openai.unknownMessage || 'Desculpe, não consegui processar sua mensagem.',
+      });
+    }
+  }
+}
+```
+
+## Chatwoot Integration Pattern
+
+### Chatwoot Service
+```typescript
+export class ChatwootService extends BaseChatbotService<any, any> {
+  constructor(
+    waMonitor: WAMonitoringService,
+    configService: ConfigService,
+    prismaRepository: PrismaRepository,
+    private readonly chatwootCache: CacheService,
+  ) {
+    super(waMonitor, prismaRepository, 'ChatwootService', configService);
+  }
+
+  public async eventWhatsapp(
+    event: Events,
+    instanceName: { instanceName: string },
+    data: any,
+  ): Promise<void> {
+    const chatwootConfig = this.configService.get<Chatwoot>('CHATWOOT');
+    
+    if (!chatwootConfig.ENABLED) {
+      return;
+    }
+
+    try {
+      const instance = await this.prismaRepository.instance.findUnique({
+        where: { name: instanceName.instanceName },
+      });
+
+      if (!instance?.chatwootAccountId) {
+        return;
+      }
+
+      const webhook = {
+        event,
+        instance: instanceName.instanceName,
+        data,
+        timestamp: new Date().toISOString(),
+      };
+
+      await axios.post(
+        `${instance.chatwootUrl}/api/v1/accounts/${instance.chatwootAccountId}/webhooks`,
+        webhook,
+        {
+          headers: {
+            'Authorization': `Bearer ${instance.chatwootToken}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+    } catch (error) {
+      this.logger.error(`Chatwoot webhook error: ${error.message}`);
+    }
+  }
+
+  public async createConversation(
+    instanceName: string,
+    contact: any,
+    message: any,
+  ): Promise<void> {
+    // Create conversation in Chatwoot
+    const instance = await this.prismaRepository.instance.findUnique({
+      where: { name: instanceName },
+    });
+
+    if (!instance?.chatwootAccountId) {
+      return;
+    }
+
+    try {
+      const conversation = await axios.post(
+        `${instance.chatwootUrl}/api/v1/accounts/${instance.chatwootAccountId}/conversations`,
+        {
+          source_id: contact.id,
+          inbox_id: instance.chatwootInboxId,
+          contact_id: contact.chatwootContactId,
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${instance.chatwootToken}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      // Cache conversation
+      await this.chatwootCache.set(
+        `conversation:${instanceName}:${contact.id}`,
+        conversation.data,
+        3600
+      );
+    } catch (error) {
+      this.logger.error(`Chatwoot conversation creation error: ${error.message}`);
+    }
+  }
+}
+```
+
+## Dify Integration Pattern
+
+### Dify Service
+```typescript
+export class DifyService extends BaseChatbotService<DifyModel, any> {
+  constructor(
+    waMonitor: WAMonitoringService,
+    prismaRepository: PrismaRepository,
+    configService: ConfigService,
+    private readonly openaiService: OpenaiService,
+  ) {
+    super(waMonitor, prismaRepository, 'DifyService', configService);
+  }
+
+  public async sendDifyMessage(
+    instanceName: string,
+    remoteJid: string,
+    dify: DifyModel,
+    content: string,
+  ): Promise<void> {
+    try {
+      const response = await axios.post(
+        `${dify.apiUrl}/v1/chat-messages`,
+        {
+          inputs: {},
+          query: content,
+          user: remoteJid,
+          conversation_id: `${instanceName}-${remoteJid}`,
+          response_mode: 'blocking',
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${dify.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const aiResponse = response.data.answer;
+      
+      await this.waMonitor.waInstances[instanceName].sendMessage({
+        number: remoteJid.split('@')[0],
+        text: aiResponse,
+      });
+    } catch (error) {
+      this.logger.error(`Dify API error: ${error.message}`);
+      
+      // Fallback to OpenAI if configured
+      if (dify.fallbackOpenai && this.openaiService) {
+        await this.openaiService.sendOpenaiMessage(instanceName, remoteJid, dify.openaiBot, content);
+      }
+    }
+  }
+}
+```
+
+## Chatbot Router Pattern
+
+### Chatbot Router Structure (Evolution API Real Pattern)
+```typescript
+export class ChatbotRouter {
+  public readonly router: Router;
+
+  constructor(...guards: any[]) {
+    this.router = Router();
+
+    // Real Evolution API chatbot integrations
+    this.router.use('/evolutionBot', new EvolutionBotRouter(...guards).router);
+    this.router.use('/chatwoot', new ChatwootRouter(...guards).router);
+    this.router.use('/typebot', new TypebotRouter(...guards).router);
+    this.router.use('/openai', new OpenaiRouter(...guards).router);
+    this.router.use('/dify', new DifyRouter(...guards).router);
+    this.router.use('/flowise', new FlowiseRouter(...guards).router);
+    this.router.use('/n8n', new N8nRouter(...guards).router);
+    this.router.use('/evoai', new EvoaiRouter(...guards).router);
+  }
+}
+```
+
+## Chatbot Validation Patterns
+
+### Chatbot Schema Validation (Evolution API Pattern)
+```typescript
+import { JSONSchema7 } from 'json-schema';
+import { v4 } from 'uuid';
+
+const isNotEmpty = (...fields: string[]) => {
+  const properties = {};
+  fields.forEach((field) => {
+    properties[field] = {
+      if: { properties: { [field]: { type: 'string' } } },
+      then: { properties: { [field]: { minLength: 1 } } },
+    };
+  });
+
+  return {
+    allOf: Object.values(properties),
+  };
+};
+
+export const evolutionBotSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    enabled: { type: 'boolean' },
+    description: { type: 'string' },
+    apiUrl: { type: 'string' },
+    apiKey: { type: 'string' },
+    triggerType: { type: 'string', enum: ['all', 'keyword', 'none', 'advanced'] },
+    triggerOperator: { type: 'string', enum: ['equals', 'contains', 'startsWith', 'endsWith', 'regex'] },
+    triggerValue: { type: 'string' },
+    expire: { type: 'integer' },
+    keywordFinish: { type: 'string' },
+    delayMessage: { type: 'integer' },
+    unknownMessage: { type: 'string' },
+    listeningFromMe: { type: 'boolean' },
+    stopBotFromMe: { type: 'boolean' },
+    keepOpen: { type: 'boolean' },
+    debounceTime: { type: 'integer' },
+    ignoreJids: { type: 'array', items: { type: 'string' } },
+    splitMessages: { type: 'boolean' },
+    timePerChar: { type: 'integer' },
+  },
+  required: ['enabled', 'apiUrl', 'triggerType'],
+  ...isNotEmpty('enabled', 'apiUrl', 'triggerType'),
+};
+
+function validateKeywordTrigger(
+  content: string,
+  operator: TriggerOperator,
+  value: string,
+): boolean {
+  const normalizedContent = content.toLowerCase().trim();
+  const normalizedValue = value.toLowerCase().trim();
+
+  switch (operator) {
+    case TriggerOperator.EQUALS:
+      return normalizedContent === normalizedValue;
+    case TriggerOperator.CONTAINS:
+      return normalizedContent.includes(normalizedValue);
+    case TriggerOperator.STARTS_WITH:
+      return normalizedContent.startsWith(normalizedValue);
+    case TriggerOperator.ENDS_WITH:
+      return normalizedContent.endsWith(normalizedValue);
+    default:
+      return false;
+  }
+}
+```
+
+## Session Management Pattern
+
+### Chatbot Session Handling
+```typescript
+export class ChatbotSessionManager {
+  constructor(
+    private readonly prismaRepository: PrismaRepository,
+    private readonly cache: CacheService,
+  ) {}
+
+  public async getSession(
+    instanceName: string,
+    remoteJid: string,
+    botId: string,
+  ): Promise<IntegrationSession | null> {
+    const cacheKey = `session:${instanceName}:${remoteJid}:${botId}`;
+    
+    // Try cache first
+    let session = await this.cache.get(cacheKey);
+    if (session) {
+      return session;
+    }
+
+    // Query database
+    session = await this.prismaRepository.integrationSession.findFirst({
+      where: {
+        instanceId: instanceName,
+        remoteJid,
+        botId,
+        status: 'opened',
+      },
+    });
+
+    // Cache result
+    if (session) {
+      await this.cache.set(cacheKey, session, 300); // 5 min TTL
+    }
+
+    return session;
+  }
+
+  public async createSession(
+    instanceName: string,
+    remoteJid: string,
+    botId: string,
+  ): Promise<IntegrationSession> {
+    const session = await this.prismaRepository.integrationSession.create({
+      data: {
+        instanceId: instanceName,
+        remoteJid,
+        botId,
+        status: 'opened',
+        createdAt: new Date(),
+      },
+    });
+
+    // Cache new session
+    const cacheKey = `session:${instanceName}:${remoteJid}:${botId}`;
+    await this.cache.set(cacheKey, session, 300);
+
+    return session;
+  }
+
+  public async closeSession(sessionId: string): Promise<void> {
+    await this.prismaRepository.integrationSession.update({
+      where: { id: sessionId },
+      data: { status: 'closed', updatedAt: new Date() },
+    });
+
+    // Invalidate cache
+    // Note: In a real implementation, you'd need to track cache keys by session ID
+  }
+}
+```

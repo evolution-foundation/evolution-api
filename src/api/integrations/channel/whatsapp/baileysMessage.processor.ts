@@ -1,5 +1,5 @@
 import { Logger } from '@config/logger.config';
-import { BaileysEventMap, MessageUpsertType, proto } from 'baileys';
+import { BaileysEventMap, MessageUpsertType, WAMessage } from 'baileys';
 import { catchError, concatMap, delay, EMPTY, from, retryWhen, Subject, Subscription, take, tap } from 'rxjs';
 
 type MessageUpsertPayload = BaileysEventMap['messages.upsert'];
@@ -12,13 +12,29 @@ export class BaileysMessageProcessor {
   private subscription?: Subscription;
 
   protected messageSubject = new Subject<{
-    messages: proto.IWebMessageInfo[];
+    messages: WAMessage[];
     type: MessageUpsertType;
     requestId?: string;
     settings: any;
   }>();
 
   mount({ onMessageReceive }: MountProps) {
+    // Se já existe subscription, fazer cleanup primeiro
+    if (this.subscription && !this.subscription.closed) {
+      this.subscription.unsubscribe();
+    }
+
+    // Se o Subject foi completado, recriar
+    if (this.messageSubject.closed) {
+      this.processorLogs.warn('MessageSubject was closed, recreating...');
+      this.messageSubject = new Subject<{
+        messages: WAMessage[];
+        type: MessageUpsertType;
+        requestId?: string;
+        settings: any;
+      }>();
+    }
+
     this.subscription = this.messageSubject
       .pipe(
         tap(({ messages }) => {

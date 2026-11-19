@@ -24,7 +24,7 @@ export class SettingsService {
       }
 
       return result;
-    } catch (error) {
+    } catch {
       return null;
     }
   }

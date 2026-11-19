@@ -4,6 +4,7 @@ import { Integration } from '@api/types/wa.types';
 import { ConfigService, HttpServer } from '@config/env.config';
 import { Dify, DifySetting, IntegrationSession } from '@prisma/client';
 import axios from 'axios';
+import { isURL } from 'class-validator';
 
 import { BaseChatbotService } from '../../base-chatbot.service';
 import { OpenaiService } from '../../openai/services/openai.service';
@@ -78,15 +79,35 @@ export class DifyService extends BaseChatbotService<Dify, DifySetting> {
 
         // Handle image messages
         if (this.isImageMessage(content)) {
-          const contentSplit = content.split('|');
-          payload.files = [
-            {
-              type: 'image',
-              transfer_method: 'remote_url',
-              url: contentSplit[1].split('?')[0],
-            },
-          ];
-          payload.query = contentSplit[2] || content;
+          const media = content.split('|');
+
+          if (msg.message.mediaUrl || msg.message.base64) {
+            let mediaBase64 = msg.message.base64 || null;
+
+            if (msg.message.mediaUrl && isURL(msg.message.mediaUrl)) {
+              const result = await axios.get(msg.message.mediaUrl, { responseType: 'arraybuffer' });
+              mediaBase64 = Buffer.from(result.data).toString('base64');
+            }
+
+            if (mediaBase64) {
+              payload.files = [
+                {
+                  type: 'image',
+                  transfer_method: 'remote_url',
+                  url: mediaBase64,
+                },
+              ];
+            }
+          } else {
+            payload.files = [
+              {
+                type: 'image',
+                transfer_method: 'remote_url',
+                url: media[1].split('?')[0],
+              },
+            ];
+          }
+          payload.query = media[2] || content;
         }
 
         if (instance.integration === Integration.WHATSAPP_BAILEYS) {
@@ -107,7 +128,7 @@ export class DifyService extends BaseChatbotService<Dify, DifySetting> {
         const conversationId = response?.data?.conversation_id;
 
         if (message) {
-          await this.sendMessageWhatsApp(instance, remoteJid, message, settings);
+          await this.sendMessageWhatsApp(instance, remoteJid, message, settings, true);
         }
 
         await this.prismaRepository.integrationSession.update({
@@ -140,15 +161,35 @@ export class DifyService extends BaseChatbotService<Dify, DifySetting> {
 
         // Handle image messages
         if (this.isImageMessage(content)) {
-          const contentSplit = content.split('|');
-          payload.files = [
-            {
-              type: 'image',
-              transfer_method: 'remote_url',
-              url: contentSplit[1].split('?')[0],
-            },
-          ];
-          payload.inputs.query = contentSplit[2] || content;
+          const media = content.split('|');
+
+          if (msg.message.mediaUrl || msg.message.base64) {
+            let mediaBase64 = msg.message.base64 || null;
+
+            if (msg.message.mediaUrl && isURL(msg.message.mediaUrl)) {
+              const result = await axios.get(msg.message.mediaUrl, { responseType: 'arraybuffer' });
+              mediaBase64 = Buffer.from(result.data).toString('base64');
+            }
+
+            if (mediaBase64) {
+              payload.files = [
+                {
+                  type: 'image',
+                  transfer_method: 'remote_url',
+                  url: mediaBase64,
+                },
+              ];
+            }
+          } else {
+            payload.files = [
+              {
+                type: 'image',
+                transfer_method: 'remote_url',
+                url: media[1].split('?')[0],
+              },
+            ];
+            payload.inputs.query = media[2] || content;
+          }
         }
 
         if (instance.integration === Integration.WHATSAPP_BAILEYS) {
@@ -169,7 +210,7 @@ export class DifyService extends BaseChatbotService<Dify, DifySetting> {
         const conversationId = response?.data?.conversation_id;
 
         if (message) {
-          await this.sendMessageWhatsApp(instance, remoteJid, message, settings);
+          await this.sendMessageWhatsApp(instance, remoteJid, message, settings, true);
         }
 
         await this.prismaRepository.integrationSession.update({
@@ -202,15 +243,26 @@ export class DifyService extends BaseChatbotService<Dify, DifySetting> {
 
         // Handle image messages
         if (this.isImageMessage(content)) {
-          const contentSplit = content.split('|');
-          payload.files = [
-            {
-              type: 'image',
-              transfer_method: 'remote_url',
-              url: contentSplit[1].split('?')[0],
-            },
-          ];
-          payload.query = contentSplit[2] || content;
+          const media = content.split('|');
+
+          if (msg.message.mediaUrl || msg.message.base64) {
+            payload.files = [
+              {
+                type: 'image',
+                transfer_method: 'remote_url',
+                url: msg.message.mediaUrl || msg.message.base64,
+              },
+            ];
+          } else {
+            payload.files = [
+              {
+                type: 'image',
+                transfer_method: 'remote_url',
+                url: media[1].split('?')[0],
+              },
+            ];
+            payload.query = media[2] || content;
+          }
         }
 
         if (instance.integration === Integration.WHATSAPP_BAILEYS) {
@@ -246,7 +298,7 @@ export class DifyService extends BaseChatbotService<Dify, DifySetting> {
           await instance.client.sendPresenceUpdate('paused', remoteJid);
 
         if (answer) {
-          await this.sendMessageWhatsApp(instance, remoteJid, answer, settings);
+          await this.sendMessageWhatsApp(instance, remoteJid, answer, settings, true);
         }
 
         await this.prismaRepository.integrationSession.update({

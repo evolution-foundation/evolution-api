@@ -1,0 +1,19 @@
+Evolution API
+Copyright 2026 Evolution Foundation
+
+This product includes software developed by Evolution Foundation
+(https://evolutionfoundation.com.br).
+
+Trademark notice
+"Evolution Foundation", "Evolution" and "Evolution API" are trademarks of
+Evolution Foundation. The Evolution API logo, wordmark, and visual identity
+are governed by the Trademark and Brand Assets Policy included in this
+repository (TRADEMARKS.md).
+
+Third-party attributions
+
+This product includes software derived from CodeChat WhatsApp API
+(https://github.com/code-chat-br/whatsapp-api), originally licensed under MIT.
+The CodeChat project implemented the Baileys library
+(https://github.com/WhiskeySockets/Baileys), which Evolution API also uses for
+its WhatsApp Web integration.

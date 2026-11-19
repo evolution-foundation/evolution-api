@@ -45,7 +45,7 @@ export class RabbitmqController extends EventController implements EventControll
         heartbeat: 30, // Add heartbeat of 30 seconds
       };
 
-      amqp.connect(connectionOptions, (error, connection) => {
+      amqp.connect(connectionOptions, (error: Error, connection: amqp.Connection) => {
         if (error) {
           this.logger.error({
             local: 'RabbitmqController.connect',
@@ -57,7 +57,7 @@ export class RabbitmqController extends EventController implements EventControll
         }
 
         // Connection event handlers
-        connection.on('error', (err) => {
+        connection.on('error', (err: Error) => {
           this.logger.error({
             local: 'RabbitmqController.connectionError',
             message: 'RabbitMQ connection error',
@@ -71,7 +71,7 @@ export class RabbitmqController extends EventController implements EventControll
           this.handleConnectionLoss();
         });
 
-        connection.createChannel((channelError, channel) => {
+        connection.createChannel((channelError: Error, channel: amqp.Channel) => {
           if (channelError) {
             this.logger.error({
               local: 'RabbitmqController.createChannel',
@@ -83,7 +83,7 @@ export class RabbitmqController extends EventController implements EventControll
           }
 
           // Channel event handlers
-          channel.on('error', (err) => {
+          channel.on('error', (err: Error) => {
             this.logger.error({
               local: 'RabbitmqController.channelError',
               message: 'RabbitMQ channel error',
@@ -136,8 +136,7 @@ export class RabbitmqController extends EventController implements EventControll
       return; // Already attempting to reconnect
     }
 
-    this.amqpChannel = null;
-    this.amqpConnection = null;
+    this.cleanup();
     this.scheduleReconnect();
   }
 
@@ -210,6 +209,7 @@ export class RabbitmqController extends EventController implements EventControll
     sender,
     apiKey,
     integration,
+    extra,
   }: EmitData): Promise<void> {
     if (integration && !integration.includes('rabbitmq')) {
       return;
@@ -234,6 +234,7 @@ export class RabbitmqController extends EventController implements EventControll
     const logEnabled = configService.get<Log>('LOG').LEVEL.includes('WEBHOOKS');
 
     const message = {
+      ...(extra ?? {}),
       event,
       instance: instanceName,
       data,
@@ -404,6 +405,27 @@ export class RabbitmqController extends EventController implements EventControll
         this.handleConnectionLoss();
         break;
       }
+    }
+  }
+
+  public async cleanup(): Promise<void> {
+    try {
+      if (this.amqpChannel) {
+        await this.amqpChannel.close();
+        this.amqpChannel = null;
+      }
+      if (this.amqpConnection) {
+        await this.amqpConnection.close();
+        this.amqpConnection = null;
+      }
+    } catch (error) {
+      this.logger.warn({
+        local: 'RabbitmqController.cleanup',
+        message: 'Error during cleanup',
+        error: error.message || error,
+      });
+      this.amqpChannel = null;
+      this.amqpConnection = null;
     }
   }
 }

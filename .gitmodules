@@ -1,0 +1,3 @@
+[submodule "evolution-manager-v2"]
+	path = evolution-manager-v2
+	url = https://github.com/evolution-foundation/evolution-manager-v2.git

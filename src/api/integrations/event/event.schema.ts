@@ -22,6 +22,9 @@ export const eventSchema: JSONSchema7 = {
     sqs: {
       $ref: '#/$defs/event',
     },
+    kafka: {
+      $ref: '#/$defs/event',
+    },
   },
   $defs: {
     event: {

@@ -26,14 +26,14 @@ const minioClient = (() => {
   }
 })();
 
-const bucketName = process.env.S3_BUCKET;
+const bucketName = BUCKET.BUCKET_NAME;
 
 const bucketExists = async () => {
   if (minioClient) {
     try {
       const list = await minioClient.listBuckets();
       return list.find((bucket) => bucket.name === bucketName);
-    } catch (error) {
+    } catch {
       return false;
     }
   }

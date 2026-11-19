@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 export type HttpServer = {
+  NAME: string;
   TYPE: 'http' | 'https';
   PORT: number;
   URL: string;
@@ -113,15 +114,77 @@ export type Nats = {
 
 export type Sqs = {
   ENABLED: boolean;
+  GLOBAL_ENABLED: boolean;
+  GLOBAL_FORCE_SINGLE_QUEUE: boolean;
+  GLOBAL_PREFIX_NAME: string;
   ACCESS_KEY_ID: string;
   SECRET_ACCESS_KEY: string;
   ACCOUNT_ID: string;
   REGION: string;
+  MAX_PAYLOAD_SIZE: number;
+  EVENTS: {
+    APPLICATION_STARTUP: boolean;
+    CALL: boolean;
+    CHATS_DELETE: boolean;
+    CHATS_SET: boolean;
+    CHATS_UPDATE: boolean;
+    CHATS_UPSERT: boolean;
+    CONNECTION_UPDATE: boolean;
+    CONTACTS_SET: boolean;
+    CONTACTS_UPDATE: boolean;
+    CONTACTS_UPSERT: boolean;
+    GROUP_PARTICIPANTS_UPDATE: boolean;
+    GROUPS_UPDATE: boolean;
+    GROUPS_UPSERT: boolean;
+    LABELS_ASSOCIATION: boolean;
+    LABELS_EDIT: boolean;
+    LOGOUT_INSTANCE: boolean;
+    MESSAGES_DELETE: boolean;
+    MESSAGES_EDITED: boolean;
+    MESSAGES_SET: boolean;
+    MESSAGES_UPDATE: boolean;
+    MESSAGES_UPSERT: boolean;
+    PRESENCE_UPDATE: boolean;
+    QRCODE_UPDATED: boolean;
+    REMOVE_INSTANCE: boolean;
+    SEND_MESSAGE: boolean;
+    TYPEBOT_CHANGE_STATUS: boolean;
+    TYPEBOT_START: boolean;
+  };
+};
+
+export type Kafka = {
+  ENABLED: boolean;
+  CLIENT_ID: string;
+  BROKERS: string[];
+  CONNECTION_TIMEOUT: number;
+  REQUEST_TIMEOUT: number;
+  GLOBAL_ENABLED: boolean;
+  CONSUMER_GROUP_ID: string;
+  TOPIC_PREFIX: string;
+  NUM_PARTITIONS: number;
+  REPLICATION_FACTOR: number;
+  AUTO_CREATE_TOPICS: boolean;
+  EVENTS: EventsRabbitmq;
+  SASL?: {
+    ENABLED: boolean;
+    MECHANISM: string;
+    USERNAME: string;
+    PASSWORD: string;
+  };
+  SSL?: {
+    ENABLED: boolean;
+    REJECT_UNAUTHORIZED: boolean;
+    CA?: string;
+    KEY?: string;
+    CERT?: string;
+  };
 };
 
 export type Websocket = {
   ENABLED: boolean;
   GLOBAL_EVENTS: boolean;
+  ALLOWED_HOSTS?: string;
 };
 
 export type WaBusiness = {
@@ -282,9 +345,50 @@ export type S3 = {
   USE_SSL?: boolean;
   REGION?: string;
   SKIP_POLICY?: boolean;
+  SAVE_VIDEO?: boolean;
 };
 
 export type CacheConf = { REDIS: CacheConfRedis; LOCAL: CacheConfLocal };
+export type Metrics = {
+  ENABLED: boolean;
+  AUTH_REQUIRED: boolean;
+  USER?: string;
+  PASSWORD?: string;
+  ALLOWED_IPS?: string;
+};
+
+export type Telemetry = {
+  ENABLED: boolean;
+  URL?: string;
+};
+
+export type Proxy = {
+  HOST?: string;
+  PORT?: string;
+  PROTOCOL?: string;
+  USERNAME?: string;
+  PASSWORD?: string;
+};
+
+export type AudioConverter = {
+  API_URL?: string;
+  API_KEY?: string;
+};
+
+export type Facebook = {
+  APP_ID?: string;
+  CONFIG_ID?: string;
+  USER_TOKEN?: string;
+};
+
+export type Sentry = {
+  DSN?: string;
+};
+
+export type EventEmitter = {
+  MAX_LISTENERS: number;
+};
+
 export type Production = boolean;
 
 export interface Env {
@@ -296,6 +400,7 @@ export interface Env {
   RABBITMQ: Rabbitmq;
   NATS: Nats;
   SQS: Sqs;
+  KAFKA: Kafka;
   WEBSOCKET: Websocket;
   WA_BUSINESS: WaBusiness;
   LOG: Log;
@@ -316,6 +421,13 @@ export interface Env {
   CACHE: CacheConf;
   S3?: S3;
   AUTHENTICATION: Auth;
+  METRICS: Metrics;
+  TELEMETRY: Telemetry;
+  PROXY: Proxy;
+  AUDIO_CONVERTER: AudioConverter;
+  FACEBOOK: Facebook;
+  SENTRY: Sentry;
+  EVENT_EMITTER: EventEmitter;
   PRODUCTION?: Production;
 }
 
@@ -344,6 +456,7 @@ export class ConfigService {
   private envProcess(): Env {
     return {
       SERVER: {
+        NAME: process.env?.SERVER_NAME || 'evolution',
         TYPE: (process.env.SERVER_TYPE as 'http' | 'https') || 'http',
         PORT: Number.parseInt(process.env.SERVER_PORT) || 8080,
         URL: process.env.SERVER_URL,
@@ -465,14 +578,110 @@ export class ConfigService {
       },
       SQS: {
         ENABLED: process.env?.SQS_ENABLED === 'true',
+        GLOBAL_ENABLED: process.env?.SQS_GLOBAL_ENABLED === 'true',
+        GLOBAL_FORCE_SINGLE_QUEUE: process.env?.SQS_GLOBAL_FORCE_SINGLE_QUEUE === 'true',
+        GLOBAL_PREFIX_NAME: process.env?.SQS_GLOBAL_PREFIX_NAME || 'global',
         ACCESS_KEY_ID: process.env.SQS_ACCESS_KEY_ID || '',
         SECRET_ACCESS_KEY: process.env.SQS_SECRET_ACCESS_KEY || '',
         ACCOUNT_ID: process.env.SQS_ACCOUNT_ID || '',
         REGION: process.env.SQS_REGION || '',
+        MAX_PAYLOAD_SIZE: Number.parseInt(process.env.SQS_MAX_PAYLOAD_SIZE ?? '1048576'),
+        EVENTS: {
+          APPLICATION_STARTUP: process.env?.SQS_GLOBAL_APPLICATION_STARTUP === 'true',
+          CALL: process.env?.SQS_GLOBAL_CALL === 'true',
+          CHATS_DELETE: process.env?.SQS_GLOBAL_CHATS_DELETE === 'true',
+          CHATS_SET: process.env?.SQS_GLOBAL_CHATS_SET === 'true',
+          CHATS_UPDATE: process.env?.SQS_GLOBAL_CHATS_UPDATE === 'true',
+          CHATS_UPSERT: process.env?.SQS_GLOBAL_CHATS_UPSERT === 'true',
+          CONNECTION_UPDATE: process.env?.SQS_GLOBAL_CONNECTION_UPDATE === 'true',
+          CONTACTS_SET: process.env?.SQS_GLOBAL_CONTACTS_SET === 'true',
+          CONTACTS_UPDATE: process.env?.SQS_GLOBAL_CONTACTS_UPDATE === 'true',
+          CONTACTS_UPSERT: process.env?.SQS_GLOBAL_CONTACTS_UPSERT === 'true',
+          GROUP_PARTICIPANTS_UPDATE: process.env?.SQS_GLOBAL_GROUP_PARTICIPANTS_UPDATE === 'true',
+          GROUPS_UPDATE: process.env?.SQS_GLOBAL_GROUPS_UPDATE === 'true',
+          GROUPS_UPSERT: process.env?.SQS_GLOBAL_GROUPS_UPSERT === 'true',
+          LABELS_ASSOCIATION: process.env?.SQS_GLOBAL_LABELS_ASSOCIATION === 'true',
+          LABELS_EDIT: process.env?.SQS_GLOBAL_LABELS_EDIT === 'true',
+          LOGOUT_INSTANCE: process.env?.SQS_GLOBAL_LOGOUT_INSTANCE === 'true',
+          MESSAGES_DELETE: process.env?.SQS_GLOBAL_MESSAGES_DELETE === 'true',
+          MESSAGES_EDITED: process.env?.SQS_GLOBAL_MESSAGES_EDITED === 'true',
+          MESSAGES_SET: process.env?.SQS_GLOBAL_MESSAGES_SET === 'true',
+          MESSAGES_UPDATE: process.env?.SQS_GLOBAL_MESSAGES_UPDATE === 'true',
+          MESSAGES_UPSERT: process.env?.SQS_GLOBAL_MESSAGES_UPSERT === 'true',
+          PRESENCE_UPDATE: process.env?.SQS_GLOBAL_PRESENCE_UPDATE === 'true',
+          QRCODE_UPDATED: process.env?.SQS_GLOBAL_QRCODE_UPDATED === 'true',
+          REMOVE_INSTANCE: process.env?.SQS_GLOBAL_REMOVE_INSTANCE === 'true',
+          SEND_MESSAGE: process.env?.SQS_GLOBAL_SEND_MESSAGE === 'true',
+          TYPEBOT_CHANGE_STATUS: process.env?.SQS_GLOBAL_TYPEBOT_CHANGE_STATUS === 'true',
+          TYPEBOT_START: process.env?.SQS_GLOBAL_TYPEBOT_START === 'true',
+        },
+      },
+      KAFKA: {
+        ENABLED: process.env?.KAFKA_ENABLED === 'true',
+        CLIENT_ID: process.env?.KAFKA_CLIENT_ID || 'evolution-api',
+        BROKERS: process.env?.KAFKA_BROKERS?.split(',') || ['localhost:9092'],
+        CONNECTION_TIMEOUT: Number.parseInt(process.env?.KAFKA_CONNECTION_TIMEOUT || '3000'),
+        REQUEST_TIMEOUT: Number.parseInt(process.env?.KAFKA_REQUEST_TIMEOUT || '30000'),
+        GLOBAL_ENABLED: process.env?.KAFKA_GLOBAL_ENABLED === 'true',
+        CONSUMER_GROUP_ID: process.env?.KAFKA_CONSUMER_GROUP_ID || 'evolution-api-consumers',
+        TOPIC_PREFIX: process.env?.KAFKA_TOPIC_PREFIX || 'evolution',
+        NUM_PARTITIONS: Number.parseInt(process.env?.KAFKA_NUM_PARTITIONS || '1'),
+        REPLICATION_FACTOR: Number.parseInt(process.env?.KAFKA_REPLICATION_FACTOR || '1'),
+        AUTO_CREATE_TOPICS: process.env?.KAFKA_AUTO_CREATE_TOPICS === 'true',
+        EVENTS: {
+          APPLICATION_STARTUP: process.env?.KAFKA_EVENTS_APPLICATION_STARTUP === 'true',
+          INSTANCE_CREATE: process.env?.KAFKA_EVENTS_INSTANCE_CREATE === 'true',
+          INSTANCE_DELETE: process.env?.KAFKA_EVENTS_INSTANCE_DELETE === 'true',
+          QRCODE_UPDATED: process.env?.KAFKA_EVENTS_QRCODE_UPDATED === 'true',
+          MESSAGES_SET: process.env?.KAFKA_EVENTS_MESSAGES_SET === 'true',
+          MESSAGES_UPSERT: process.env?.KAFKA_EVENTS_MESSAGES_UPSERT === 'true',
+          MESSAGES_EDITED: process.env?.KAFKA_EVENTS_MESSAGES_EDITED === 'true',
+          MESSAGES_UPDATE: process.env?.KAFKA_EVENTS_MESSAGES_UPDATE === 'true',
+          MESSAGES_DELETE: process.env?.KAFKA_EVENTS_MESSAGES_DELETE === 'true',
+          SEND_MESSAGE: process.env?.KAFKA_EVENTS_SEND_MESSAGE === 'true',
+          SEND_MESSAGE_UPDATE: process.env?.KAFKA_EVENTS_SEND_MESSAGE_UPDATE === 'true',
+          CONTACTS_SET: process.env?.KAFKA_EVENTS_CONTACTS_SET === 'true',
+          CONTACTS_UPSERT: process.env?.KAFKA_EVENTS_CONTACTS_UPSERT === 'true',
+          CONTACTS_UPDATE: process.env?.KAFKA_EVENTS_CONTACTS_UPDATE === 'true',
+          PRESENCE_UPDATE: process.env?.KAFKA_EVENTS_PRESENCE_UPDATE === 'true',
+          CHATS_SET: process.env?.KAFKA_EVENTS_CHATS_SET === 'true',
+          CHATS_UPSERT: process.env?.KAFKA_EVENTS_CHATS_UPSERT === 'true',
+          CHATS_UPDATE: process.env?.KAFKA_EVENTS_CHATS_UPDATE === 'true',
+          CHATS_DELETE: process.env?.KAFKA_EVENTS_CHATS_DELETE === 'true',
+          CONNECTION_UPDATE: process.env?.KAFKA_EVENTS_CONNECTION_UPDATE === 'true',
+          LABELS_EDIT: process.env?.KAFKA_EVENTS_LABELS_EDIT === 'true',
+          LABELS_ASSOCIATION: process.env?.KAFKA_EVENTS_LABELS_ASSOCIATION === 'true',
+          GROUPS_UPSERT: process.env?.KAFKA_EVENTS_GROUPS_UPSERT === 'true',
+          GROUP_UPDATE: process.env?.KAFKA_EVENTS_GROUPS_UPDATE === 'true',
+          GROUP_PARTICIPANTS_UPDATE: process.env?.KAFKA_EVENTS_GROUP_PARTICIPANTS_UPDATE === 'true',
+          CALL: process.env?.KAFKA_EVENTS_CALL === 'true',
+          TYPEBOT_START: process.env?.KAFKA_EVENTS_TYPEBOT_START === 'true',
+          TYPEBOT_CHANGE_STATUS: process.env?.KAFKA_EVENTS_TYPEBOT_CHANGE_STATUS === 'true',
+        },
+        SASL:
+          process.env?.KAFKA_SASL_ENABLED === 'true'
+            ? {
+                ENABLED: true,
+                MECHANISM: process.env?.KAFKA_SASL_MECHANISM || 'plain',
+                USERNAME: process.env?.KAFKA_SASL_USERNAME || '',
+                PASSWORD: process.env?.KAFKA_SASL_PASSWORD || '',
+              }
+            : undefined,
+        SSL:
+          process.env?.KAFKA_SSL_ENABLED === 'true'
+            ? {
+                ENABLED: true,
+                REJECT_UNAUTHORIZED: process.env?.KAFKA_SSL_REJECT_UNAUTHORIZED !== 'false',
+                CA: process.env?.KAFKA_SSL_CA,
+                KEY: process.env?.KAFKA_SSL_KEY,
+                CERT: process.env?.KAFKA_SSL_CERT,
+              }
+            : undefined,
       },
       WEBSOCKET: {
         ENABLED: process.env?.WEBSOCKET_ENABLED === 'true',
         GLOBAL_EVENTS: process.env?.WEBSOCKET_GLOBAL_EVENTS === 'true',
+        ALLOWED_HOSTS: process.env?.WEBSOCKET_ALLOWED_HOSTS,
       },
       PUSHER: {
         ENABLED: process.env?.PUSHER_ENABLED === 'true',
@@ -653,12 +862,46 @@ export class ConfigService {
         USE_SSL: process.env?.S3_USE_SSL === 'true',
         REGION: process.env?.S3_REGION,
         SKIP_POLICY: process.env?.S3_SKIP_POLICY === 'true',
+        SAVE_VIDEO: process.env?.S3_SAVE_VIDEO === 'true',
       },
       AUTHENTICATION: {
         API_KEY: {
           KEY: process.env.AUTHENTICATION_API_KEY || 'BQYHJGJHJ',
         },
         EXPOSE_IN_FETCH_INSTANCES: process.env?.AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES === 'true',
+      },
+      METRICS: {
+        ENABLED: process.env?.PROMETHEUS_METRICS === 'true',
+        AUTH_REQUIRED: process.env?.METRICS_AUTH_REQUIRED === 'true',
+        USER: process.env?.METRICS_USER,
+        PASSWORD: process.env?.METRICS_PASSWORD,
+        ALLOWED_IPS: process.env?.METRICS_ALLOWED_IPS,
+      },
+      TELEMETRY: {
+        ENABLED: process.env?.TELEMETRY_ENABLED === undefined || process.env?.TELEMETRY_ENABLED === 'true',
+        URL: process.env?.TELEMETRY_URL,
+      },
+      PROXY: {
+        HOST: process.env?.PROXY_HOST,
+        PORT: process.env?.PROXY_PORT,
+        PROTOCOL: process.env?.PROXY_PROTOCOL,
+        USERNAME: process.env?.PROXY_USERNAME,
+        PASSWORD: process.env?.PROXY_PASSWORD,
+      },
+      AUDIO_CONVERTER: {
+        API_URL: process.env?.API_AUDIO_CONVERTER,
+        API_KEY: process.env?.API_AUDIO_CONVERTER_KEY,
+      },
+      FACEBOOK: {
+        APP_ID: process.env?.FACEBOOK_APP_ID,
+        CONFIG_ID: process.env?.FACEBOOK_CONFIG_ID,
+        USER_TOKEN: process.env?.FACEBOOK_USER_TOKEN,
+      },
+      SENTRY: {
+        DSN: process.env?.SENTRY_DSN,
+      },
+      EVENT_EMITTER: {
+        MAX_LISTENERS: Number.parseInt(process.env?.EVENT_EMITTER_MAX_LISTENERS) || 50,
       },
     };
   }

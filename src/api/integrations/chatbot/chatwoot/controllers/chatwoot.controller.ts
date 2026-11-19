@@ -1,10 +1,6 @@
 import { InstanceDto } from '@api/dto/instance.dto';
 import { ChatwootDto } from '@api/integrations/chatbot/chatwoot/dto/chatwoot.dto';
 import { ChatwootService } from '@api/integrations/chatbot/chatwoot/services/chatwoot.service';
-import { PrismaRepository } from '@api/repository/repository.service';
-import { waMonitor } from '@api/server.module';
-import { CacheService } from '@api/services/cache.service';
-import { CacheEngine } from '@cache/cacheengine';
 import { Chatwoot, ConfigService, HttpServer } from '@config/env.config';
 import { BadRequestException } from '@exceptions';
 import { isURL } from 'class-validator';
@@ -13,7 +9,6 @@ export class ChatwootController {
   constructor(
     private readonly chatwootService: ChatwootService,
     private readonly configService: ConfigService,
-    private readonly prismaRepository: PrismaRepository,
   ) {}
 
   public async createChatwoot(instance: InstanceDto, data: ChatwootDto) {
@@ -84,9 +79,6 @@ export class ChatwootController {
   public async receiveWebhook(instance: InstanceDto, data: any) {
     if (!this.configService.get<Chatwoot>('CHATWOOT').ENABLED) throw new BadRequestException('Chatwoot is disabled');
 
-    const chatwootCache = new CacheService(new CacheEngine(this.configService, ChatwootService.name).getEngine());
-    const chatwootService = new ChatwootService(waMonitor, this.configService, this.prismaRepository, chatwootCache);
-
-    return chatwootService.receiveWebhook(instance, data);
+    return this.chatwootService.receiveWebhook(instance, data);
   }
 }

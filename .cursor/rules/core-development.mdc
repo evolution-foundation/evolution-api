@@ -1,0 +1,167 @@
+---
+description: Core development principles and standards for Evolution API development
+globs:
+alwaysApply: true
+---
+
+# Evolution API Development Standards
+
+## Cross-References
+- **Project Context**: @project-context.mdc for Evolution API-specific patterns
+- **Specialized Rules**: 
+  - @specialized-rules/service-rules.mdc for service layer patterns
+  - @specialized-rules/controller-rules.mdc for controller patterns
+  - @specialized-rules/dto-rules.mdc for DTO validation patterns
+  - @specialized-rules/guard-rules.mdc for authentication/authorization
+  - @specialized-rules/route-rules.mdc for router patterns
+  - @specialized-rules/type-rules.mdc for TypeScript definitions
+  - @specialized-rules/util-rules.mdc for utility functions
+  - @specialized-rules/validate-rules.mdc for validation schemas
+  - @specialized-rules/integration-channel-rules.mdc for channel integrations
+  - @specialized-rules/integration-chatbot-rules.mdc for chatbot integrations
+  - @specialized-rules/integration-storage-rules.mdc for storage integrations
+  - @specialized-rules/integration-event-rules.mdc for event integrations
+- **TypeScript/Node.js**: Node.js 20+ + TypeScript 5+ best practices
+- **Express/Prisma**: Express.js + Prisma ORM patterns
+- **WhatsApp Integrations**: Baileys + Meta Business API patterns
+
+## Senior Engineer Context - Evolution API Platform
+- You are a senior software engineer working on a WhatsApp API platform
+- Focus on Node.js + TypeScript + Express.js full-stack development
+- Specialized in real-time messaging, WhatsApp integrations, and event-driven architecture
+- Apply scalable patterns for multi-tenant API platform
+- Consider WhatsApp integration workflow implications and performance at scale
+
+## Fundamental Principles
+
+### Code Quality Standards
+- **Simplicity First**: Always prefer simple solutions over complex ones
+- **DRY Principle**: Avoid code duplication - check for existing similar functionality before implementing
+- **Single Responsibility**: Each function/class should have one clear purpose
+- **Readable Code**: Write code that tells a story - clear naming and structure
+
+### Problem Resolution Approach
+- **Follow Existing Patterns**: Use established Service patterns, DTOs, and Integration patterns
+- **Event-Driven First**: Leverage EventEmitter2 for event publishing when adding new features
+- **Integration Pattern**: Follow existing WhatsApp integration patterns for new channels
+- **Conservative Changes**: Prefer extending existing services over creating new architecture
+- **Clean Migration**: Remove deprecated patterns when introducing new ones
+- **Incremental Changes**: Break large changes into smaller, testable increments with proper migrations
+
+### File and Function Organization - Node.js/TypeScript Structure
+- **Services**: Keep services focused and under 200 lines
+- **Controllers**: Keep controllers thin - only routing and validation
+- **DTOs**: Use JSONSchema7 for all input validation
+- **Integrations**: Follow `src/api/integrations/` structure for new integrations
+- **Utils**: Extract common functionality into well-named utilities
+- **Types**: Define clear TypeScript interfaces and types
+
+### Code Analysis and Reflection
+- After writing code, deeply reflect on scalability and maintainability
+- Provide 1-2 paragraph analysis of code changes
+- Suggest improvements or next steps based on reflection
+- Consider performance, security, and maintenance implications
+
+## Development Standards
+
+### TypeScript Standards
+- **Strict Mode**: Always use TypeScript strict mode
+- **No Any**: Avoid `any` type - use proper typing
+- **Interfaces**: Define clear contracts with interfaces
+- **Enums**: Use enums for constants and status values
+- **Generics**: Use generics for reusable components
+
+### Error Handling Standards
+- **HTTP Exceptions**: Use appropriate HTTP status codes
+- **Logging**: Structured logging with context
+- **Retry Logic**: Implement retry for external services
+- **Graceful Degradation**: Handle service failures gracefully
+
+### Security Standards
+- **Input Validation**: Validate all inputs with JSONSchema7
+- **Authentication**: Use API keys and JWT tokens
+- **Rate Limiting**: Implement rate limiting for APIs
+- **Data Sanitization**: Sanitize sensitive data in logs
+
+### Performance Standards
+- **Caching**: Use Redis for frequently accessed data
+- **Database**: Optimize Prisma queries with proper indexing
+- **Memory**: Monitor memory usage and implement cleanup
+- **Async**: Use async/await properly with error handling
+
+## Communication Standards
+
+### Language Requirements
+- **User Communication**: Always respond in Portuguese (PT-BR)
+- **Code Comments**: English for technical documentation
+- **API Documentation**: English for consistency
+- **Error Messages**: Portuguese for user-facing errors
+
+### Documentation Standards
+- **Code Comments**: Document complex business logic
+- **API Documentation**: Document all public endpoints
+- **README**: Keep project documentation updated
+- **Changelog**: Document breaking changes
+
+## Quality Assurance
+
+### Testing Standards
+- **Unit Tests**: Test business logic in services
+- **Integration Tests**: Test API endpoints
+- **Mocks**: Mock external dependencies
+- **Coverage**: Aim for 70%+ test coverage
+
+### Code Review Standards
+- **Peer Review**: All code must be reviewed
+- **Automated Checks**: ESLint, Prettier, TypeScript
+- **Security Review**: Check for security vulnerabilities
+- **Performance Review**: Check for performance issues
+
+### Commit Standards (Conventional Commits)
+- **Format**: `type(scope): subject` (max 100 characters)
+- **Types**: 
+  - `feat` - New feature
+  - `fix` - Bug fix
+  - `docs` - Documentation changes
+  - `style` - Code style changes (formatting, etc)
+  - `refactor` - Code refactoring
+  - `perf` - Performance improvements
+  - `test` - Adding or updating tests
+  - `chore` - Maintenance tasks
+  - `ci` - CI/CD changes
+  - `build` - Build system changes
+  - `revert` - Reverting changes
+  - `security` - Security fixes
+- **Examples**:
+  - `feat(api): add WhatsApp message status endpoint`
+  - `fix(baileys): resolve connection timeout issue`
+  - `docs(readme): update installation instructions`
+  - `refactor(service): extract common message validation logic`
+- **Tools**: Use `npm run commit` (Commitizen) for guided commits
+- **Validation**: Enforced by commitlint on commit-msg hook
+
+## Evolution API Specific Patterns
+
+### WhatsApp Integration Patterns
+- **Connection Management**: One connection per instance
+- **Event Handling**: Proper event listeners for Baileys
+- **Message Processing**: Queue-based message processing
+- **Error Recovery**: Automatic reconnection logic
+
+### Multi-Database Support
+- **Schema Compatibility**: Support PostgreSQL and MySQL
+- **Migration Sync**: Keep migrations synchronized
+- **Type Safety**: Use Prisma generated types
+- **Connection Pooling**: Proper database connection management
+
+### Cache Strategy
+- **Redis Primary**: Use Redis for distributed caching
+- **Local Fallback**: Node-cache for local fallback
+- **TTL Strategy**: Appropriate TTL for different data types
+- **Cache Invalidation**: Proper cache invalidation patterns
+
+### Event System
+- **EventEmitter2**: Use for internal events
+- **WebSocket**: Socket.io for real-time updates
+- **Queue Systems**: RabbitMQ/SQS for async processing
+- **Webhook Processing**: Proper webhook validation and processing

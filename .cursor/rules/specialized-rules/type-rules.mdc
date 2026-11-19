@@ -1,0 +1,490 @@
+---
+description: Type definitions and interfaces for Evolution API
+globs:
+  - "src/api/types/**/*.ts"
+  - "src/@types/**/*.ts"
+alwaysApply: false
+---
+
+# Evolution API Type Rules
+
+## Namespace Pattern
+
+### WhatsApp Types Namespace
+```typescript
+/* eslint-disable @typescript-eslint/no-namespace */
+import { JsonValue } from '@prisma/client/runtime/library';
+import { AuthenticationState, WAConnectionState } from 'baileys';
+
+export declare namespace wa {
+  export type QrCode = {
+    count?: number;
+    pairingCode?: string;
+    base64?: string;
+    code?: string;
+  };
+
+  export type Instance = {
+    id?: string;
+    qrcode?: QrCode;
+    pairingCode?: string;
+    authState?: { state: AuthenticationState; saveCreds: () => void };
+    name?: string;
+    wuid?: string;
+    profileName?: string;
+    profilePictureUrl?: string;
+    token?: string;
+    number?: string;
+    integration?: string;
+    businessId?: string;
+  };
+
+  export type LocalChatwoot = {
+    enabled?: boolean;
+    accountId?: string;
+    token?: string;
+    url?: string;
+    nameInbox?: string;
+    mergeBrazilContacts?: boolean;
+    importContacts?: boolean;
+    importMessages?: boolean;
+    daysLimitImportMessages?: number;
+    organization?: string;
+    logo?: string;
+  };
+
+  export type LocalProxy = {
+    enabled?: boolean;
+    host?: string;
+    port?: string;
+    protocol?: string;
+    username?: string;
+    password?: string;
+  };
+
+  export type LocalSettings = {
+    rejectCall?: boolean;
+    msgCall?: string;
+    groupsIgnore?: boolean;
+    alwaysOnline?: boolean;
+    readMessages?: boolean;
+    readStatus?: boolean;
+    syncFullHistory?: boolean;
+  };
+
+  export type LocalWebHook = {
+    enabled?: boolean;
+    url?: string;
+    events?: string[];
+    headers?: JsonValue;
+    byEvents?: boolean;
+    base64?: boolean;
+  };
+
+  export type StatusMessage = 'ERROR' | 'PENDING' | 'SERVER_ACK' | 'DELIVERY_ACK' | 'READ' | 'DELETED' | 'PLAYED';
+}
+```
+
+## Enum Definitions
+
+### Events Enum
+```typescript
+export enum Events {
+  APPLICATION_STARTUP = 'application.startup',
+  INSTANCE_CREATE = 'instance.create',
+  INSTANCE_DELETE = 'instance.delete',
+  QRCODE_UPDATED = 'qrcode.updated',
+  CONNECTION_UPDATE = 'connection.update',
+  STATUS_INSTANCE = 'status.instance',
+  MESSAGES_SET = 'messages.set',
+  MESSAGES_UPSERT = 'messages.upsert',
+  MESSAGES_EDITED = 'messages.edited',
+  MESSAGES_UPDATE = 'messages.update',
+  MESSAGES_DELETE = 'messages.delete',
+  SEND_MESSAGE = 'send.message',
+  SEND_MESSAGE_UPDATE = 'send.message.update',
+  CONTACTS_SET = 'contacts.set',
+  CONTACTS_UPSERT = 'contacts.upsert',
+  CONTACTS_UPDATE = 'contacts.update',
+  PRESENCE_UPDATE = 'presence.update',
+  CHATS_SET = 'chats.set',
+  CHATS_UPDATE = 'chats.update',
+  CHATS_UPSERT = 'chats.upsert',
+  CHATS_DELETE = 'chats.delete',
+  GROUPS_UPSERT = 'groups.upsert',
+  GROUPS_UPDATE = 'groups.update',
+  GROUP_PARTICIPANTS_UPDATE = 'group-participants.update',
+  CALL = 'call',
+  TYPEBOT_START = 'typebot.start',
+  TYPEBOT_CHANGE_STATUS = 'typebot.change-status',
+  LABELS_EDIT = 'labels.edit',
+  LABELS_ASSOCIATION = 'labels.association',
+  CREDS_UPDATE = 'creds.update',
+  MESSAGING_HISTORY_SET = 'messaging-history.set',
+  REMOVE_INSTANCE = 'remove.instance',
+  LOGOUT_INSTANCE = 'logout.instance',
+}
+```
+
+### Integration Types
+```typescript
+export const Integration = {
+  WHATSAPP_BUSINESS: 'WHATSAPP-BUSINESS',
+  WHATSAPP_BAILEYS: 'WHATSAPP-BAILEYS',
+  EVOLUTION: 'EVOLUTION',
+} as const;
+
+export type IntegrationType = typeof Integration[keyof typeof Integration];
+```
+
+## Constant Arrays
+
+### Message Type Constants
+```typescript
+export const TypeMediaMessage = [
+  'imageMessage',
+  'documentMessage',
+  'audioMessage',
+  'videoMessage',
+  'stickerMessage',
+  'ptvMessage', // Evolution API includes this
+];
+
+export const MessageSubtype = [
+  'ephemeralMessage',
+  'documentWithCaptionMessage',
+  'viewOnceMessage',
+  'viewOnceMessageV2',
+];
+
+export type MediaMessageType = typeof TypeMediaMessage[number];
+export type MessageSubtypeType = typeof MessageSubtype[number];
+```
+
+## Interface Definitions
+
+### Service Interfaces
+```typescript
+export interface ServiceInterface {
+  create(instance: InstanceDto, data: any): Promise<any>;
+  find(instance: InstanceDto): Promise<any>;
+  update?(instance: InstanceDto, data: any): Promise<any>;
+  delete?(instance: InstanceDto): Promise<any>;
+}
+
+export interface ChannelServiceInterface extends ServiceInterface {
+  sendMessage(data: SendMessageDto): Promise<any>;
+  connectToWhatsapp(data?: any): Promise<void>;
+  receiveWebhook?(data: any): Promise<void>;
+}
+
+export interface ChatbotServiceInterface extends ServiceInterface {
+  processMessage(
+    instanceName: string,
+    remoteJid: string,
+    message: any,
+    pushName?: string,
+  ): Promise<void>;
+}
+```
+
+## Configuration Types
+
+### Environment Configuration Types
+```typescript
+export interface DatabaseConfig {
+  CONNECTION: {
+    URI: string;
+    DB_PREFIX_NAME: string;
+    CLIENT_NAME?: string;
+  };
+  ENABLED: boolean;
+  SAVE_DATA: {
+    INSTANCE: boolean;
+    NEW_MESSAGE: boolean;
+    MESSAGE_UPDATE: boolean;
+    CONTACTS: boolean;
+    CHATS: boolean;
+  };
+}
+
+export interface AuthConfig {
+  TYPE: 'apikey' | 'jwt';
+  API_KEY: {
+    KEY: string;
+  };
+  JWT?: {
+    EXPIRIN_IN: number;
+    SECRET: string;
+  };
+}
+
+export interface CacheConfig {
+  REDIS: {
+    ENABLED: boolean;
+    URI: string;
+    PREFIX_KEY: string;
+    SAVE_INSTANCES: boolean;
+  };
+  LOCAL: {
+    ENABLED: boolean;
+    TTL: number;
+  };
+}
+```
+
+## Message Types
+
+### Message Structure Types
+```typescript
+export interface MessageContent {
+  text?: string;
+  caption?: string;
+  media?: Buffer | string;
+  mediatype?: 'image' | 'video' | 'audio' | 'document' | 'sticker';
+  fileName?: string;
+  mimetype?: string;
+}
+
+export interface MessageOptions {
+  delay?: number;
+  presence?: 'unavailable' | 'available' | 'composing' | 'recording' | 'paused';
+  linkPreview?: boolean;
+  mentionsEveryOne?: boolean;
+  mentioned?: string[];
+  quoted?: {
+    key: {
+      remoteJid: string;
+      fromMe: boolean;
+      id: string;
+    };
+    message: any;
+  };
+}
+
+export interface SendMessageRequest {
+  number: string;
+  content: MessageContent;
+  options?: MessageOptions;
+}
+```
+
+## Webhook Types
+
+### Webhook Payload Types
+```typescript
+export interface WebhookPayload {
+  event: Events;
+  instance: string;
+  data: any;
+  timestamp: string;
+  server?: {
+    version: string;
+    host: string;
+  };
+}
+
+export interface WebhookConfig {
+  enabled: boolean;
+  url: string;
+  events: Events[];
+  headers?: Record<string, string>;
+  byEvents?: boolean;
+  base64?: boolean;
+}
+```
+
+## Error Types
+
+### Custom Error Types
+```typescript
+export interface ApiError {
+  status: number;
+  message: string;
+  error?: string;
+  details?: any;
+  timestamp: string;
+  path: string;
+}
+
+export interface ValidationError extends ApiError {
+  status: 400;
+  validationErrors: Array<{
+    field: string;
+    message: string;
+    value?: any;
+  }>;
+}
+
+export interface AuthenticationError extends ApiError {
+  status: 401;
+  message: 'Unauthorized' | 'Invalid API Key' | 'Token Expired';
+}
+```
+
+## Utility Types
+
+### Generic Utility Types
+```typescript
+export type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
+
+export type RequiredFields<T, K extends keyof T> = T & Required<Pick<T, K>>;
+
+export type DeepPartial<T> = {
+  [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P];
+};
+
+export type NonEmptyArray<T> = [T, ...T[]];
+
+export type StringKeys<T> = {
+  [K in keyof T]: T[K] extends string ? K : never;
+}[keyof T];
+```
+
+## Response Types
+
+### API Response Types
+```typescript
+export interface ApiResponse<T = any> {
+  success: boolean;
+  data?: T;
+  message?: string;
+  error?: string;
+  timestamp: string;
+}
+
+export interface PaginatedResponse<T> extends ApiResponse<T[]> {
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+}
+
+export interface InstanceResponse extends ApiResponse {
+  instance: {
+    instanceName: string;
+    status: 'connecting' | 'open' | 'close' | 'qr';
+    qrcode?: string;
+    profileName?: string;
+    profilePicUrl?: string;
+  };
+}
+```
+
+## Integration-Specific Types
+
+### Baileys Types Extension
+```typescript
+import { WASocket, ConnectionState, DisconnectReason } from 'baileys';
+
+export interface BaileysInstance {
+  client: WASocket;
+  state: ConnectionState;
+  qrRetry: number;
+  authPath: string;
+}
+
+export interface BaileysConfig {
+  qrTimeout: number;
+  maxQrRetries: number;
+  authTimeout: number;
+  reconnectInterval: number;
+}
+```
+
+### Business API Types
+```typescript
+export interface BusinessApiConfig {
+  version: string;
+  baseUrl: string;
+  timeout: number;
+  retries: number;
+}
+
+export interface BusinessApiMessage {
+  messaging_product: 'whatsapp';
+  to: string;
+  type: 'text' | 'image' | 'document' | 'audio' | 'video' | 'template';
+  text?: {
+    body: string;
+    preview_url?: boolean;
+  };
+  image?: {
+    link?: string;
+    id?: string;
+    caption?: string;
+  };
+  template?: {
+    name: string;
+    language: {
+      code: string;
+    };
+    components?: any[];
+  };
+}
+```
+
+## Type Guards
+
+### Type Guard Functions
+```typescript
+export function isMediaMessage(message: any): message is MediaMessage {
+  return message && TypeMediaMessage.some(type => message[type]);
+}
+
+export function isTextMessage(message: any): message is TextMessage {
+  return message && message.conversation;
+}
+
+export function isValidIntegration(integration: string): integration is IntegrationType {
+  return Object.values(Integration).includes(integration as IntegrationType);
+}
+
+export function isValidEvent(event: string): event is Events {
+  return Object.values(Events).includes(event as Events);
+}
+```
+
+## Module Augmentation
+
+### Express Request Extension
+```typescript
+declare global {
+  namespace Express {
+    interface Request {
+      instanceName?: string;
+      instanceData?: InstanceDto;
+      user?: {
+        id: string;
+        apiKey: string;
+      };
+    }
+  }
+}
+```
+
+## Type Documentation
+
+### JSDoc Type Documentation
+```typescript
+/**
+ * WhatsApp instance configuration
+ * @interface InstanceConfig
+ * @property {string} name - Unique instance name
+ * @property {IntegrationType} integration - Integration type
+ * @property {string} [token] - API token for business integrations
+ * @property {WebhookConfig} [webhook] - Webhook configuration
+ * @property {ProxyConfig} [proxy] - Proxy configuration
+ */
+export interface InstanceConfig {
+  name: string;
+  integration: IntegrationType;
+  token?: string;
+  webhook?: WebhookConfig;
+  proxy?: ProxyConfig;
+}
+```

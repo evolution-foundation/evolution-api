@@ -6,6 +6,7 @@ import { IntegrationSession, OpenaiBot, OpenaiSetting } from '@prisma/client';
 import { sendTelemetry } from '@utils/sendTelemetry';
 import axios from 'axios';
 import { downloadMediaMessage } from 'baileys';
+import { isURL } from 'class-validator';
 import FormData from 'form-data';
 import OpenAI from 'openai';
 import P from 'pino';
@@ -85,6 +86,7 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
             remoteJid,
             "Sorry, I couldn't transcribe your audio message. Could you please type your message instead?",
             settings,
+            true,
           );
           return;
         }
@@ -173,7 +175,7 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
       }
 
       // Process with the appropriate API based on bot type
-      await this.sendMessageToBot(instance, session, settings, openaiBot, remoteJid, pushName || '', content);
+      await this.sendMessageToBot(instance, session, settings, openaiBot, remoteJid, pushName || '', content, msg);
     } catch (error) {
       this.logger.error(`Error in process: ${error.message || JSON.stringify(error)}`);
       return;
@@ -191,6 +193,7 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
     remoteJid: string,
     pushName: string,
     content: string,
+    msg?: any,
   ): Promise<void> {
     this.logger.log(`Sending message to bot for remoteJid: ${remoteJid}, bot type: ${openaiBot.botType}`);
 
@@ -222,10 +225,11 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
           pushName,
           false, // Not fromMe
           content,
+          msg,
         );
       } else {
         this.logger.log('Processing with ChatCompletion API');
-        message = await this.processChatCompletionMessage(instance, openaiBot, remoteJid, content);
+        message = await this.processChatCompletionMessage(instance, openaiBot, remoteJid, content, msg);
       }
 
       this.logger.log(`Got response from OpenAI: ${message?.substring(0, 50)}${message?.length > 50 ? '...' : ''}`);
@@ -233,7 +237,7 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
       // Send the response
       if (message) {
         this.logger.log('Sending message to WhatsApp');
-        await this.sendMessageWhatsApp(instance, remoteJid, message, settings);
+        await this.sendMessageWhatsApp(instance, remoteJid, message, settings, true);
       } else {
         this.logger.error('No message to send to WhatsApp');
       }
@@ -268,6 +272,7 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
     pushName: string,
     fromMe: boolean,
     content: string,
+    msg?: any,
   ): Promise<string> {
     const messageData: any = {
       role: fromMe ? 'assistant' : 'user',
@@ -276,18 +281,35 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
 
     // Handle image messages
     if (this.isImageMessage(content)) {
-      const contentSplit = content.split('|');
-      const url = contentSplit[1].split('?')[0];
+      const media = content.split('|');
 
-      messageData.content = [
-        { type: 'text', text: contentSplit[2] || content },
-        {
-          type: 'image_url',
-          image_url: {
-            url: url,
+      if (msg.message.mediaUrl || msg.message.base64) {
+        let mediaBase64 = msg.message.base64 || null;
+
+        if (msg.message.mediaUrl && isURL(msg.message.mediaUrl)) {
+          const result = await axios.get(msg.message.mediaUrl, { responseType: 'arraybuffer' });
+          mediaBase64 = Buffer.from(result.data).toString('base64');
+        }
+
+        if (mediaBase64) {
+          messageData.content = [
+            { type: 'text', text: media[2] || content },
+            { type: 'image_url', image_url: { url: mediaBase64 } },
+          ];
+        }
+      } else {
+        const url = media[1].split('?')[0];
+
+        messageData.content = [
+          { type: 'text', text: media[2] || content },
+          {
+            type: 'image_url',
+            image_url: {
+              url: url,
+            },
           },
-        },
-      ];
+        ];
+      }
     }
 
     // Get thread ID from session or create new thread
@@ -376,6 +398,7 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
     openaiBot: OpenaiBot,
     remoteJid: string,
     content: string,
+    msg?: any,
   ): Promise<string> {
     this.logger.log('Starting processChatCompletionMessage');
 
@@ -468,18 +491,26 @@ export class OpenaiService extends BaseChatbotService<OpenaiBot, OpenaiSetting> 
     // Handle image messages
     if (this.isImageMessage(content)) {
       this.logger.log('Found image message');
-      const contentSplit = content.split('|');
-      const url = contentSplit[1].split('?')[0];
+      const media = content.split('|');
 
-      messageData.content = [
-        { type: 'text', text: contentSplit[2] || content },
-        {
-          type: 'image_url',
-          image_url: {
-            url: url,
+      if (msg.message.mediaUrl || msg.message.base64) {
+        messageData.content = [
+          { type: 'text', text: media[2] || content },
+          { type: 'image_url', image_url: { url: msg.message.base64 || msg.message.mediaUrl } },
+        ];
+      } else {
+        const url = media[1].split('?')[0];
+
+        messageData.content = [
+          { type: 'text', text: media[2] || content },
+          {
+            type: 'image_url',
+            image_url: {
+              url: url,
+            },
           },
-        },
-      ];
+        ];
+      }
     }
 
     // Combine all messages: system messages, pre-defined messages, conversation history, and current message

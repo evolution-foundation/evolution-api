@@ -91,19 +91,19 @@ export class ChatbotController {
       pushName,
       isIntegration,
     };
-    await evolutionBotController.emit(emitData);
+    evolutionBotController.emit(emitData);
 
-    await typebotController.emit(emitData);
+    typebotController.emit(emitData);
 
-    await openaiController.emit(emitData);
+    openaiController.emit(emitData);
 
-    await difyController.emit(emitData);
+    difyController.emit(emitData);
 
-    await n8nController.emit(emitData);
+    n8nController.emit(emitData);
 
-    await evoaiController.emit(emitData);
+    evoaiController.emit(emitData);
 
-    await flowiseController.emit(emitData);
+    flowiseController.emit(emitData);
   }
 
   public processDebounce(

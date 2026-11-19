@@ -40,6 +40,11 @@ export class EventDto {
     useTLS?: boolean;
     events?: string[];
   };
+
+  kafka?: {
+    enabled?: boolean;
+    events?: string[];
+  };
 }
 
 export function EventInstanceMixin<TBase extends Constructor>(Base: TBase) {
@@ -80,6 +85,11 @@ export function EventInstanceMixin<TBase extends Constructor>(Base: TBase) {
       secret?: string;
       cluster?: string;
       useTLS?: boolean;
+      events?: string[];
+    };
+
+    kafka?: {
+      enabled?: boolean;
       events?: string[];
     };
   };

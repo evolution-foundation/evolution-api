@@ -1,0 +1,433 @@
+---
+description: DTO patterns and validation for Evolution API
+globs:
+  - "src/api/dto/**/*.ts"
+  - "src/api/integrations/**/dto/*.ts"
+alwaysApply: false
+---
+
+# Evolution API DTO Rules
+
+## DTO Structure Pattern
+
+### Basic DTO Class
+```typescript
+export class ExampleDto {
+  name: string;
+  category: string;
+  allowCategoryChange: boolean;
+  language: string;
+  components: any;
+  webhookUrl?: string;
+}
+```
+
+## Inheritance Pattern
+
+### DTO Inheritance
+```typescript
+// CORRECT - Evolution API pattern
+export class InstanceDto extends IntegrationDto {
+  instanceName: string;
+  instanceId?: string;
+  qrcode?: boolean;
+  businessId?: string;
+  number?: string;
+  integration?: string;
+  token?: string;
+  status?: string;
+  ownerJid?: string;
+  profileName?: string;
+  profilePicUrl?: string;
+  
+  // Settings
+  rejectCall?: boolean;
+  msgCall?: string;
+  groupsIgnore?: boolean;
+  alwaysOnline?: boolean;
+  readMessages?: boolean;
+  readStatus?: boolean;
+  syncFullHistory?: boolean;
+  wavoipToken?: string;
+  
+  // Proxy settings
+  proxyHost?: string;
+  proxyPort?: string;
+  proxyProtocol?: string;
+  proxyUsername?: string;
+  proxyPassword?: string;
+  
+  // Webhook configuration
+  webhook?: {
+    enabled?: boolean;
+    events?: string[];
+    headers?: JsonValue;
+    url?: string;
+    byEvents?: boolean;
+    base64?: boolean;
+  };
+  
+  // Chatwoot integration
+  chatwootAccountId?: string;
+  chatwootConversationPending?: boolean;
+  chatwootAutoCreate?: boolean;
+  chatwootDaysLimitImportMessages?: number;
+  chatwootImportContacts?: boolean;
+  chatwootImportMessages?: boolean;
+  chatwootLogo?: string;
+  chatwootMergeBrazilContacts?: boolean;
+  chatwootNameInbox?: string;
+  chatwootOrganization?: string;
+  chatwootReopenConversation?: boolean;
+  chatwootSignMsg?: boolean;
+  chatwootToken?: string;
+  chatwootUrl?: string;
+}
+```
+
+## Base DTO Pattern
+
+### Base Chatbot DTO
+```typescript
+/**
+ * Base DTO for all chatbot integrations
+ * Contains common properties shared by all chatbot types
+ */
+export class BaseChatbotDto {
+  enabled?: boolean;
+  description: string;
+  expire?: number;
+  keywordFinish?: string;
+  delayMessage?: number;
+  unknownMessage?: string;
+  listeningFromMe?: boolean;
+  stopBotFromMe?: boolean;
+  keepOpen?: boolean;
+  debounceTime?: number;
+  triggerType: TriggerType;
+  triggerOperator?: TriggerOperator;
+  triggerValue?: string;
+  ignoreJids?: string[];
+  splitMessages?: boolean;
+  timePerChar?: number;
+}
+
+/**
+ * Base settings DTO for all chatbot integrations
+ */
+export class BaseChatbotSettingDto {
+  expire?: number;
+  keywordFinish?: string;
+  delayMessage?: number;
+  unknownMessage?: string;
+  listeningFromMe?: boolean;
+  stopBotFromMe?: boolean;
+  keepOpen?: boolean;
+  debounceTime?: number;
+  ignoreJids?: string[];
+  splitMessages?: boolean;
+  timePerChar?: number;
+}
+```
+
+## Message DTO Patterns
+
+### Send Message DTOs
+```typescript
+export class Metadata {
+  number: string;
+  delay?: number;
+}
+
+export class SendTextDto extends Metadata {
+  text: string;
+  linkPreview?: boolean;
+  mentionsEveryOne?: boolean;
+  mentioned?: string[];
+}
+
+export class SendListDto extends Metadata {
+  title: string;
+  description: string;
+  buttonText: string;
+  footerText?: string;
+
+  sections: Section[];
+}
+
+export class ContactMessage {
+  fullName: string;
+  wuid: string;
+  phoneNumber: string;
+  organization?: string;
+  email?: string;
+  url?: string;
+}
+
+export class SendTemplateDto extends Metadata {
+  name: string;
+  language: string;
+  components: any;
+}
+```
+
+## Simple DTO Patterns
+
+### Basic DTOs
+```typescript
+export class NumberDto {
+  number: string;
+}
+
+export class LabelDto {
+  id?: string;
+  name: string;
+  color: string;
+  predefinedId?: string;
+}
+
+export class HandleLabelDto {
+  number: string;
+  labelId: string;
+}
+
+export class ProfileNameDto {
+  name: string;
+}
+
+export class WhatsAppNumberDto {
+  numbers: string[];
+}
+```
+
+## Complex DTO Patterns
+
+### Business DTOs
+```typescript
+export class getCatalogDto {
+  number?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export class getCollectionsDto {
+  number?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export class NumberBusiness {
+  number: string;
+  name?: string;
+  description?: string;
+  email?: string;
+  websites?: string[];
+  latitude?: number;
+  longitude?: number;
+  address?: string;
+  profilehandle?: string;
+}
+```
+
+## Settings DTO Pattern
+
+### Settings Configuration
+```typescript
+export class SettingsDto {
+  rejectCall?: boolean;
+  msgCall?: string;
+  groupsIgnore?: boolean;
+  alwaysOnline?: boolean;
+  readMessages?: boolean;
+  readStatus?: boolean;
+  syncFullHistory?: boolean;
+  wavoipToken?: string;
+}
+
+export class ProxyDto {
+  host?: string;
+  port?: string;
+  protocol?: string;
+  username?: string;
+  password?: string;
+}
+```
+
+## Presence DTO Pattern
+
+### WhatsApp Presence
+```typescript
+export class SetPresenceDto {
+  presence: WAPresence;
+}
+
+export class SendPresenceDto {
+  number: string;
+  presence: WAPresence;
+}
+```
+
+## DTO Structure (No Decorators)
+
+### Simple DTO Classes (Evolution API Pattern)
+```typescript
+// CORRECT - Evolution API pattern (no decorators)
+export class ExampleDto {
+  name: string;
+  description?: string;
+  enabled: boolean;
+  items?: string[];
+  timeout?: number;
+}
+
+// INCORRECT - Don't use class-validator decorators
+export class ValidatedDto {
+  @IsString() // ❌ Evolution API doesn't use decorators
+  name: string;
+}
+```
+
+## Type Safety Patterns
+
+### Prisma Type Integration
+```typescript
+import { JsonValue } from '@prisma/client/runtime/library';
+import { WAPresence } from 'baileys';
+import { TriggerOperator, TriggerType } from '@prisma/client';
+
+export class TypeSafeDto {
+  presence: WAPresence;
+  triggerType: TriggerType;
+  triggerOperator?: TriggerOperator;
+  metadata?: JsonValue;
+}
+```
+
+## DTO Documentation
+
+### JSDoc Comments
+```typescript
+/**
+ * DTO for creating WhatsApp templates
+ * Used by Meta Business API integration
+ */
+export class TemplateDto {
+  /** Template name - must be unique */
+  name: string;
+  
+  /** Template category (MARKETING, UTILITY, AUTHENTICATION) */
+  category: string;
+  
+  /** Whether category can be changed after creation */
+  allowCategoryChange: boolean;
+  
+  /** Language code (e.g., 'pt_BR', 'en_US') */
+  language: string;
+  
+  /** Template components (header, body, footer, buttons) */
+  components: any;
+  
+  /** Optional webhook URL for template status updates */
+  webhookUrl?: string;
+}
+```
+
+## DTO Naming Conventions
+
+### Standard Naming Patterns
+- `*Dto` - Data transfer objects
+- `Create*Dto` - Creation DTOs
+- `Update*Dto` - Update DTOs
+- `Send*Dto` - Message sending DTOs
+- `Get*Dto` - Query DTOs
+- `Handle*Dto` - Action DTOs
+
+## File Organization
+
+### DTO File Structure
+```
+src/api/dto/
+├── instance.dto.ts          # Main instance DTO
+├── template.dto.ts          # Template management
+├── sendMessage.dto.ts       # Message sending DTOs
+├── chat.dto.ts             # Chat operations
+├── business.dto.ts         # Business API DTOs
+├── group.dto.ts            # Group management
+├── label.dto.ts            # Label management
+├── proxy.dto.ts            # Proxy configuration
+├── settings.dto.ts         # Instance settings
+└── call.dto.ts             # Call operations
+```
+
+## Integration DTO Patterns
+
+### Chatbot Integration DTOs
+```typescript
+// Base for all chatbot DTOs
+export class BaseChatbotDto {
+  enabled?: boolean;
+  description: string;
+  // ... common properties
+}
+
+// Specific chatbot DTOs extend base
+export class TypebotDto extends BaseChatbotDto {
+  url: string;
+  typebot: string;
+  // ... typebot-specific properties
+}
+
+export class OpenaiDto extends BaseChatbotDto {
+  apiKey: string;
+  model: string;
+  // ... openai-specific properties
+}
+```
+
+## DTO Testing Pattern
+
+### DTO Validation Tests
+```typescript
+describe('ExampleDto', () => {
+  it('should validate required fields', () => {
+    const dto = new ExampleDto();
+    dto.name = 'test';
+    dto.category = 'MARKETING';
+    dto.allowCategoryChange = true;
+    dto.language = 'pt_BR';
+    dto.components = {};
+
+    expect(dto.name).toBe('test');
+    expect(dto.category).toBe('MARKETING');
+  });
+
+  it('should handle optional fields', () => {
+    const dto = new ExampleDto();
+    dto.name = 'test';
+    dto.category = 'MARKETING';
+    dto.allowCategoryChange = true;
+    dto.language = 'pt_BR';
+    dto.components = {};
+    dto.webhookUrl = 'https://example.com/webhook';
+
+    expect(dto.webhookUrl).toBe('https://example.com/webhook');
+  });
+});
+```
+
+## DTO Transformation
+
+### Request to DTO Mapping (Evolution API Pattern)
+```typescript
+// CORRECT - Evolution API uses RouterBroker dataValidate
+const response = await this.dataValidate<ExampleDto>({
+  request: req,
+  schema: exampleSchema, // JSONSchema7
+  ClassRef: ExampleDto,
+  execute: (instance, data) => controller.method(instance, data),
+});
+
+// INCORRECT - Don't use class-validator
+const dto = plainToClass(ExampleDto, req.body); // ❌ Not used in Evolution API
+const errors = await validate(dto); // ❌ Not used in Evolution API
+```

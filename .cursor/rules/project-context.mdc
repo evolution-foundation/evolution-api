@@ -1,0 +1,174 @@
+---
+description: Evolution API project-specific context and constraints
+globs:
+alwaysApply: true
+---
+
+# Evolution API Project Context
+
+## Cross-References
+- **Core Development**: @core-development.mdc for fundamental development principles
+- **Specialized Rules**: Reference specific specialized rules when working on:
+  - Services: @specialized-rules/service-rules.mdc
+  - Controllers: @specialized-rules/controller-rules.mdc
+  - DTOs: @specialized-rules/dto-rules.mdc
+  - Guards: @specialized-rules/guard-rules.mdc
+  - Routes: @specialized-rules/route-rules.mdc
+  - Types: @specialized-rules/type-rules.mdc
+  - Utils: @specialized-rules/util-rules.mdc
+  - Validation: @specialized-rules/validate-rules.mdc
+  - Channel Integrations: @specialized-rules/integration-channel-rules.mdc
+  - Chatbot Integrations: @specialized-rules/integration-chatbot-rules.mdc
+  - Storage Integrations: @specialized-rules/integration-storage-rules.mdc
+  - Event Integrations: @specialized-rules/integration-event-rules.mdc
+- **TypeScript/Node.js**: Node.js 20+ + TypeScript 5+ backend standards
+- **Express/Prisma**: Express.js + Prisma ORM patterns
+- **WhatsApp Integrations**: Baileys, Meta Business API, and other messaging platforms
+
+## Technology Stack
+- **Backend**: Node.js 20+ + TypeScript 5+ + Express.js
+- **Database**: Prisma ORM (PostgreSQL/MySQL support)
+- **Cache**: Redis + Node-cache for local fallback
+- **Queue**: RabbitMQ + Amazon SQS for message processing
+- **Real-time**: Socket.io for WebSocket connections
+- **Storage**: AWS S3 + Minio for file storage
+- **Validation**: JSONSchema7 for input validation
+- **Logging**: Pino for structured logging
+- **Architecture**: Multi-tenant API with WhatsApp integrations
+
+## Project-Specific Patterns
+
+### WhatsApp Integration Architecture
+- **MANDATORY**: All WhatsApp integrations must follow established patterns
+- **BAILEYS**: Use `whatsapp.baileys.service.ts` patterns for WhatsApp Web
+- **META BUSINESS**: Use `whatsapp.business.service.ts` for official API
+- **CONNECTION MANAGEMENT**: One connection per instance with proper lifecycle
+- **EVENT HANDLING**: Proper event listeners and error handling
+
+### Multi-Database Architecture
+- **CRITICAL**: Support both PostgreSQL and MySQL
+- **SCHEMAS**: Use appropriate schema files (postgresql-schema.prisma / mysql-schema.prisma)
+- **MIGRATIONS**: Keep migrations synchronized between databases
+- **TYPES**: Use database-specific types (@db.JsonB vs @db.Json)
+- **COMPATIBILITY**: Ensure feature parity between databases
+
+### API Integration Workflow
+- **CORE FEATURE**: REST API for WhatsApp communication
+- **COMPLEXITY**: High - involves webhook processing, message routing, and instance management
+- **COMPONENTS**: Instance management, message handling, media processing
+- **INTEGRATIONS**: Baileys, Meta Business API, Chatwoot, Typebot, OpenAI, Dify
+
+### Multi-Tenant Instance Architecture
+- **CRITICAL**: All operations must be scoped by instance
+- **ISOLATION**: Complete data isolation between instances
+- **SECURITY**: Validate instance ownership before operations
+- **SCALING**: Support thousands of concurrent instances
+- **AUTHENTICATION**: API key-based authentication per instance
+
+## Documentation Requirements
+
+### Implementation Documentation
+- **MANDATORY**: Document complex integration patterns
+- **LOCATION**: Use inline comments for business logic
+- **API DOCS**: Document all public endpoints
+- **WEBHOOK DOCS**: Document webhook payloads and signatures
+
+### Change Documentation
+- **CHANGELOG**: Document breaking changes
+- **MIGRATION GUIDES**: Document database migrations
+- **INTEGRATION GUIDES**: Document new integration patterns
+
+## Environment and Security
+
+### Environment Variables
+- **CRITICAL**: Never hardcode sensitive values
+- **VALIDATION**: Validate required environment variables on startup
+- **SECURITY**: Use secure defaults and proper encryption
+- **DOCUMENTATION**: Document all environment variables
+
+### File Organization - Node.js/TypeScript Structure
+- **CONTROLLERS**: Organized by feature (`api/controllers/`)
+- **SERVICES**: Business logic in service classes (`api/services/`)
+- **INTEGRATIONS**: External integrations (`api/integrations/`)
+- **DTOS**: Data transfer objects (`api/dto/`)
+- **TYPES**: TypeScript types (`api/types/`)
+- **UTILS**: Utility functions (`utils/`)
+
+## Integration Points
+
+### WhatsApp Providers
+- **BAILEYS**: WhatsApp Web integration with QR code
+- **META BUSINESS**: Official WhatsApp Business API
+- **CLOUD API**: WhatsApp Cloud API integration
+- **WEBHOOK PROCESSING**: Proper webhook validation and processing
+
+### External Integrations
+- **CHATWOOT**: Customer support platform integration
+- **TYPEBOT**: Chatbot flow integration
+- **OPENAI**: AI-powered chat integration
+- **DIFY**: AI workflow integration
+- **STORAGE**: S3/Minio for media file storage
+
+### Event-Driven Communication
+- **EVENTEMITTER2**: Internal event system
+- **SOCKET.IO**: Real-time WebSocket communication
+- **RABBITMQ**: Message queue for async processing
+- **SQS**: Amazon SQS for cloud-based queuing
+- **WEBHOOKS**: Outbound webhook system
+
+## Development Constraints
+
+### Language Requirements
+- **USER COMMUNICATION**: Always respond in Portuguese (PT-BR)
+- **CODE/COMMENTS**: English for code and technical documentation
+- **API RESPONSES**: English for consistency
+- **ERROR MESSAGES**: Portuguese for user-facing errors
+
+### Performance Constraints
+- **MEMORY**: Efficient memory usage for multiple instances
+- **DATABASE**: Optimized queries with proper indexing
+- **CACHE**: Strategic caching for frequently accessed data
+- **CONNECTIONS**: Proper connection pooling and management
+
+### Security Constraints
+- **AUTHENTICATION**: API key validation for all endpoints
+- **AUTHORIZATION**: Instance-based access control
+- **INPUT VALIDATION**: Validate all inputs with JSONSchema7
+- **RATE LIMITING**: Prevent abuse with rate limiting
+- **WEBHOOK SECURITY**: Validate webhook signatures
+
+## Quality Standards
+- **TYPE SAFETY**: Full TypeScript coverage with strict mode
+- **ERROR HANDLING**: Comprehensive error scenarios with proper logging
+- **TESTING**: Unit and integration tests for critical paths
+- **MONITORING**: Proper logging and error tracking
+- **DOCUMENTATION**: Clear API documentation and code comments
+- **PERFORMANCE**: Optimized for high-throughput message processing
+- **SECURITY**: Secure by default with proper validation
+- **SCALABILITY**: Design for horizontal scaling
+
+## Evolution API Specific Development Patterns
+
+### Instance Management
+- **LIFECYCLE**: Proper instance creation, connection, and cleanup
+- **STATE MANAGEMENT**: Track connection status and health
+- **RECOVERY**: Automatic reconnection and error recovery
+- **MONITORING**: Health checks and status reporting
+
+### Message Processing
+- **QUEUE-BASED**: Use queues for message processing
+- **RETRY LOGIC**: Implement exponential backoff for failures
+- **MEDIA HANDLING**: Proper media upload and processing
+- **WEBHOOK DELIVERY**: Reliable webhook delivery with retries
+
+### Integration Patterns
+- **SERVICE LAYER**: Business logic in service classes
+- **DTO VALIDATION**: Input validation with JSONSchema7
+- **ERROR HANDLING**: Consistent error responses
+- **LOGGING**: Structured logging with correlation IDs
+
+### Database Patterns
+- **PRISMA**: Use Prisma ORM for all database operations
+- **TRANSACTIONS**: Use transactions for multi-step operations
+- **MIGRATIONS**: Proper migration management
+- **INDEXING**: Optimize queries with appropriate indexes

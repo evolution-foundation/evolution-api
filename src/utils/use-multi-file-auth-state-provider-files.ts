@@ -39,7 +39,11 @@ import { Logger } from '@config/logger.config';
 import { AuthenticationCreds, AuthenticationState, BufferJSON, initAuthCreds, proto, SignalDataTypeMap } from 'baileys';
 import { isNotEmpty } from 'class-validator';
 
-export type AuthState = { state: AuthenticationState; saveCreds: () => Promise<void> };
+export type AuthState = {
+  state: AuthenticationState;
+  saveCreds: () => Promise<void>;
+  removeCreds: () => Promise<void>;
+};
 
 export class AuthStateProvider {
   constructor(private readonly providerFiles: ProviderFiles) {}
@@ -86,6 +90,18 @@ export class AuthStateProvider {
       return response;
     };
 
+    const removeCreds = async () => {
+      const [response, error] = await this.providerFiles.removeSession(instance);
+      if (error) {
+        // this.logger.error(['removeData', error?.message, error?.stack]);
+        return;
+      }
+
+      logger.info({ action: 'remove.session', instance, response });
+
+      return;
+    };
+
     const creds: AuthenticationCreds = (await readData('creds')) || initAuthCreds();
 
     return {
@@ -100,7 +116,7 @@ export class AuthStateProvider {
               ids.map(async (id) => {
                 let value = await readData(`${type}-${id}`);
                 if (type === 'app-state-sync-key' && value) {
-                  value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                  value = proto.Message.AppStateSyncKeyData.create(value);
                 }
 
                 data[id] = value;
@@ -126,6 +142,10 @@ export class AuthStateProvider {
       saveCreds: async () => {
         return await writeData(creds, 'creds');
       },
+
+      removeCreds,
     };
   }
 }
+
+const logger = new Logger('useMultiFileAuthStatePrisma');
