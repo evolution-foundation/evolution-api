@@ -6,6 +6,13 @@ import * as amqp from 'amqplib/callback_api';
 
 import { EmitData, EventController, EventControllerInterface } from '../event.controller';
 
+class BrokerNackError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BrokerNackError';
+  }
+}
+
 export class RabbitmqController extends EventController implements EventControllerInterface {
   public amqpChannel: amqp.ConfirmChannel | null = null;
   private amqpConnection: amqp.Connection | null = null;
@@ -284,7 +291,7 @@ export class RabbitmqController extends EventController implements EventControll
   /**
    * Publishes a persistent message and awaits broker confirmation (and drain on backpressure).
    */
-  private publishWithConfirm(exchange: string, routingKey: string, content: Buffer): Promise<void> {
+  private publishWithConfirm(exchange: string, routingKey: string, content: Buffer, timeoutMs = 10_000): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const channel = this.amqpChannel;
       if (!channel) {
@@ -295,6 +302,7 @@ export class RabbitmqController extends EventController implements EventControll
       let settled = false;
       let confirmed = false;
       let drained = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
 
       const onDrain = () => {
         drained = true;
@@ -310,6 +318,10 @@ export class RabbitmqController extends EventController implements EventControll
       };
 
       const cleanupListeners = () => {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
         channel.removeListener('drain', onDrain);
         channel.removeListener('error', onError);
         channel.removeListener('close', onClose);
@@ -334,22 +346,39 @@ export class RabbitmqController extends EventController implements EventControll
         }
       };
 
-      const published = channel.publish(exchange, routingKey, content, { persistent: true }, (err?: Error) => {
-        if (err) {
-          finish(err);
-          return;
-        }
-        confirmed = true;
-        tryResolve();
-      });
+      channel.once('error', onError);
+      channel.once('close', onClose);
+
+      let published = false;
+      try {
+        published = channel.publish(exchange, routingKey, content, { persistent: true }, (err?: Error) => {
+          if (err) {
+            if (this.amqpChannel === channel) {
+              finish(new BrokerNackError(err.message || String(err)));
+            } else {
+              finish(err);
+            }
+            return;
+          }
+          confirmed = true;
+          tryResolve();
+        });
+      } catch (err) {
+        finish(err instanceof Error ? err : new Error(String(err)));
+        return;
+      }
 
       if (published) {
         drained = true;
         tryResolve();
       } else if (!settled) {
         channel.once('drain', onDrain);
-        channel.once('error', onError);
-        channel.once('close', onClose);
+      }
+
+      if (!settled) {
+        timer = setTimeout(() => {
+          finish(new Error('RabbitMQ publish confirmation timed out'));
+        }, timeoutMs);
       }
     });
   }
@@ -362,7 +391,7 @@ export class RabbitmqController extends EventController implements EventControll
     queueName: string;
     bindingKey: string;
     routingKey: string;
-    message: Record<string, any>;
+    message: Record<string, unknown>;
     logEnabled: boolean;
     logLocal: string;
     targetLabel: 'local' | 'global';
@@ -413,7 +442,7 @@ export class RabbitmqController extends EventController implements EventControll
         if (!this.amqpChannel) {
           break;
         }
-        if (retry >= 3) {
+        if (retry >= 3 && !(error instanceof BrokerNackError)) {
           this.handleConnectionLoss();
         }
       }

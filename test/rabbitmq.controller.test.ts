@@ -179,7 +179,7 @@ describe('RabbitmqController - Publisher Confirms & Persistence', () => {
     assert.equal(JSON.parse(call.content.toString()).event, 'messages.upsert');
   });
 
-  it('logs error, retries up to 3 times, and triggers handleConnectionLoss on persistent broker nack', async () => {
+  it('logs error, retries up to 3 times, and does not tear down healthy shared channel on persistent broker nack', async () => {
     const mockChannel = createMockConfirmChannel((_call, cb) => {
       cb(new Error('Message nacked by broker'));
     });
@@ -220,9 +220,8 @@ describe('RabbitmqController - Publisher Confirms & Persistence', () => {
     assert.match(emitErrors[0].message, /attempt 1\/3/);
     assert.match(emitErrors[2].message, /attempt 3\/3/);
     assert.equal(emitErrors[0].error, 'Message nacked by broker');
-    assert.equal(connectionLossHandled, true);
-    await new Promise((r) => setImmediate(r));
-    assert.equal(controller.amqpChannel, null);
+    assert.equal(connectionLossHandled, false);
+    assert.equal(controller.amqpChannel, mockChannel);
   });
 
   it('succeeds on retry if first publish is nacked and second is acked', async () => {
@@ -405,5 +404,53 @@ describe('RabbitmqController - Publisher Confirms & Persistence', () => {
     assert.equal(mockChannel.closeCalls, 1);
     assert.equal(channelDuringClose, null);
     assert.equal(controller.amqpChannel, null);
+  });
+
+  it('rejects publishWithConfirm on channel error even when publish() returned true', async () => {
+    const mockChannel = createMockConfirmChannel(() => true);
+    controller.amqpChannel = mockChannel;
+
+    const publishPromise = controller.publishWithConfirm('ex', 'rk', Buffer.from('hello'), 500);
+
+    assert.equal(mockChannel.listenerCount('error'), 1);
+    assert.equal(mockChannel.listenerCount('close'), 1);
+
+    mockChannel.emit('error', new Error('Socket reset'));
+
+    await assert.rejects(publishPromise, { message: 'Socket reset' });
+    assert.equal(mockChannel.listenerCount('error'), 0);
+    assert.equal(mockChannel.listenerCount('close'), 0);
+  });
+
+  it('rejects publishWithConfirm on channel close even when publish() returned true', async () => {
+    const mockChannel = createMockConfirmChannel(() => true);
+    controller.amqpChannel = mockChannel;
+
+    const publishPromise = controller.publishWithConfirm('ex', 'rk', Buffer.from('hello'), 500);
+
+    assert.equal(mockChannel.listenerCount('error'), 1);
+    assert.equal(mockChannel.listenerCount('close'), 1);
+
+    mockChannel.emit('close');
+
+    await assert.rejects(publishPromise, { message: 'AMQP channel closed during publish' });
+    assert.equal(mockChannel.listenerCount('error'), 0);
+    assert.equal(mockChannel.listenerCount('close'), 0);
+  });
+
+  it('rejects publishWithConfirm on confirmation timeout and cleans up listeners', async () => {
+    const mockChannel = createMockConfirmChannel(() => false);
+    controller.amqpChannel = mockChannel;
+
+    const publishPromise = controller.publishWithConfirm('ex', 'rk', Buffer.from('hello'), 25);
+
+    assert.equal(mockChannel.listenerCount('drain'), 1);
+    assert.equal(mockChannel.listenerCount('error'), 1);
+    assert.equal(mockChannel.listenerCount('close'), 1);
+
+    await assert.rejects(publishPromise, { message: 'RabbitMQ publish confirmation timed out' });
+    assert.equal(mockChannel.listenerCount('drain'), 0);
+    assert.equal(mockChannel.listenerCount('error'), 0);
+    assert.equal(mockChannel.listenerCount('close'), 0);
   });
 });
