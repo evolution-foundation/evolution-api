@@ -1,6 +1,7 @@
 export interface DeduplicationCache {
   has(key: string): Promise<boolean | undefined>;
-  set(key: string, value: any, ttl?: number): Promise<void>;
+  set(key: string, value: boolean, ttl?: number): Promise<void>;
+  delete?(key: string): Promise<unknown>;
 }
 
 export interface ChatbotMessageDeduplicatorOptions {
@@ -13,7 +14,7 @@ export interface ChatbotMessageDeduplicatorOptions {
   /** Clock function for deterministic testing (default: Date.now). */
   now?: () => number;
   /** Optional logger for cache fallback warnings. */
-  logger?: { warn?: (msg: any) => void };
+  logger?: { warn?: (msg: unknown) => void };
 }
 
 export interface DedupKeyParams {
@@ -39,7 +40,7 @@ export class ChatbotMessageDeduplicator {
   private readonly maxSize: number;
   private readonly cache?: DeduplicationCache;
   private readonly now: () => number;
-  private readonly logger?: { warn?: (msg: any) => void };
+  private readonly logger?: { warn?: (msg: unknown) => void };
   private readonly seen = new Map<string, number>();
 
   constructor(options: ChatbotMessageDeduplicatorOptions = {}) {
@@ -108,6 +109,26 @@ export class ChatbotMessageDeduplicator {
     }
 
     return false;
+  }
+
+  /**
+   * Releases a previously claimed deduplication key so a failed delivery can be retried.
+   */
+  public async release(params: DedupKeyParams): Promise<void> {
+    const key = this.buildKey(params);
+    if (!key) {
+      return;
+    }
+
+    this.seen.delete(key);
+
+    if (this.cache?.delete) {
+      try {
+        await this.cache.delete(key);
+      } catch (error) {
+        this.logger?.warn?.(`Chatbot deduplication cache delete failed: ${error}`);
+      }
+    }
   }
 
   /**

@@ -233,6 +233,77 @@ describe('ChatbotMessageDeduplicator', () => {
     assert.equal(warnings.length, 1);
     assert.equal(await dedupFallback.isDuplicate(params), true);
   });
+
+  it('release() removes the in-memory claim and deletes from shared cache so redelivery is allowed', async () => {
+    const store = new Map<string, boolean>();
+    const cache = {
+      async has(key: string) {
+        return store.has(key);
+      },
+      async set(key: string, value: boolean) {
+        store.set(key, value);
+      },
+      async delete(key: string) {
+        store.delete(key);
+      },
+    };
+
+    const dedup = new ChatbotMessageDeduplicator({ cache });
+    const params = {
+      integrationName: 'Typebot',
+      instanceId: 'inst-1',
+      remoteJid: '5511999999999@s.whatsapp.net',
+      messageId: 'retry-msg',
+    };
+
+    assert.equal(await dedup.isDuplicate(params), false);
+    assert.equal(dedup.size, 1);
+    assert.equal(store.size, 1);
+
+    // Duplicate before release is suppressed
+    assert.equal(await dedup.isDuplicate(params), true);
+
+    // Release clears both in-memory and shared cache entries
+    await dedup.release(params);
+    assert.equal(dedup.size, 0);
+    assert.equal(store.size, 0);
+
+    // Redelivery after release is allowed
+    assert.equal(await dedup.isDuplicate(params), false);
+  });
+
+  it('release() handles cache.delete errors and missing messageId gracefully', async () => {
+    const warnings: unknown[] = [];
+    const dedup = new ChatbotMessageDeduplicator({
+      cache: {
+        async has() {
+          return false;
+        },
+        async set() {},
+        async delete() {
+          throw new Error('Redis delete failed');
+        },
+      },
+      logger: { warn: (msg) => warnings.push(msg) },
+    });
+
+    const params = {
+      integrationName: 'Typebot',
+      instanceId: 'inst-1',
+      remoteJid: 'jid',
+      messageId: 'err-release',
+    };
+
+    assert.equal(await dedup.isDuplicate(params), false);
+    await dedup.release(params);
+    assert.equal(dedup.size, 0);
+    assert.equal(warnings.length, 1);
+    // In-memory entry was removed despite cache.delete failure
+    assert.equal(await dedup.isDuplicate(params), false);
+
+    // Missing messageId is a safe no-op
+    await dedup.release({ instanceId: 'inst-1', remoteJid: 'jid', messageId: undefined });
+  });
 });
 
 describe('BaseChatbotController.emit deduplication integration', () => {
@@ -329,5 +400,89 @@ describe('BaseChatbotController.emit deduplication integration', () => {
 
     assert.equal(controller.settingsLookups, 2);
     assert.equal(controller.processBotCalls, 2);
+  });
+
+  it('releases deduplication claim when processBot throws so a subsequent retry succeeds', async () => {
+    class FlakyProcessBotController extends TestChatbotController {
+      public shouldFail = true;
+
+      protected override async processBot(): Promise<void> {
+        this.processBotCalls += 1;
+        if (this.shouldFail) {
+          throw new Error('Downstream bot error');
+        }
+      }
+    }
+
+    const controller = new FlakyProcessBotController();
+    const instance = { instanceId: 'inst-1', instanceName: 'test-instance' } as any;
+    const remoteJid = '5511999999999@s.whatsapp.net';
+    const msg = {
+      key: {
+        id: 'BAE594145F4C59B6',
+        remoteJid,
+        fromMe: false,
+      },
+      message: {
+        conversation: 'hello',
+      },
+    };
+
+    // First delivery fails in processBot -> claim is released
+    await controller.emit({ instance, remoteJid, msg });
+    assert.equal(controller.processBotCalls, 1);
+
+    // Retry succeeds because the claim was released
+    controller.shouldFail = false;
+    await controller.emit({ instance, remoteJid, msg });
+    assert.equal(controller.processBotCalls, 2);
+
+    // Subsequent duplicate after success is suppressed
+    await controller.emit({ instance, remoteJid, msg });
+    assert.equal(controller.processBotCalls, 2);
+  });
+
+  it('releases deduplication claim when settingsRepository throws so a subsequent retry succeeds', async () => {
+    const controller = new TestChatbotController();
+    let shouldFailSettings = true;
+    const originalFindFirst = controller.settingsRepository.findFirst;
+    controller.settingsRepository = {
+      findFirst: async () => {
+        if (shouldFailSettings) {
+          controller.settingsLookups += 1;
+          throw new Error('DB connection lost');
+        }
+        return originalFindFirst();
+      },
+    };
+
+    const instance = { instanceId: 'inst-1', instanceName: 'test-instance' } as any;
+    const remoteJid = '5511999999999@s.whatsapp.net';
+    const msg = {
+      key: {
+        id: 'BAE594145F4C59B7',
+        remoteJid,
+        fromMe: false,
+      },
+      message: {
+        conversation: 'hello',
+      },
+    };
+
+    // First delivery fails in settingsRepository -> claim is released
+    await controller.emit({ instance, remoteJid, msg });
+    assert.equal(controller.settingsLookups, 1);
+    assert.equal(controller.processBotCalls, 0);
+
+    // Retry succeeds
+    shouldFailSettings = false;
+    await controller.emit({ instance, remoteJid, msg });
+    assert.equal(controller.settingsLookups, 2);
+    assert.equal(controller.processBotCalls, 1);
+
+    // Subsequent duplicate after success is suppressed
+    await controller.emit({ instance, remoteJid, msg });
+    assert.equal(controller.settingsLookups, 2);
+    assert.equal(controller.processBotCalls, 1);
   });
 });

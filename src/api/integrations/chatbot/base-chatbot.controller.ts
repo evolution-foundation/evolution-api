@@ -792,14 +792,17 @@ export abstract class BaseChatbotController<BotType = any, BotData extends BaseC
   public async emit({ instance, remoteJid, msg }: EmitData) {
     if (!this.integrationEnabled) return;
 
+    const dedupParams = {
+      integrationName: this.integrationName,
+      instanceId: instance?.instanceId,
+      instanceName: instance?.instanceName,
+      remoteJid: remoteJid ?? msg?.key?.remoteJid,
+      messageId: msg?.key?.id,
+    };
+    let claimed = false;
+
     try {
-      const isDuplicate = await this.messageDeduplicator.isDuplicate({
-        integrationName: this.integrationName,
-        instanceId: instance?.instanceId,
-        instanceName: instance?.instanceName,
-        remoteJid: remoteJid ?? msg?.key?.remoteJid,
-        messageId: msg?.key?.id,
-      });
+      const isDuplicate = await this.messageDeduplicator.isDuplicate(dedupParams);
 
       if (isDuplicate) {
         this.logger?.verbose?.(
@@ -807,6 +810,8 @@ export abstract class BaseChatbotController<BotType = any, BotData extends BaseC
         );
         return;
       }
+
+      claimed = true;
 
       const settings = await this.settingsRepository.findFirst({
         where: {
@@ -963,6 +968,9 @@ export abstract class BaseChatbotController<BotType = any, BotData extends BaseC
         );
       }
     } catch (error) {
+      if (claimed) {
+        await this.messageDeduplicator.release(dedupParams);
+      }
       this.logger.error(error);
     }
   }
