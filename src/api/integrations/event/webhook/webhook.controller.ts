@@ -9,6 +9,7 @@ import axios, { AxiosInstance } from 'axios';
 import * as jwt from 'jsonwebtoken';
 
 import { EmitData, EventController, EventControllerInterface } from '../event.controller';
+import { filterWebhookPayload } from './webhook-payload-filter';
 
 export class WebhookController extends EventController implements EventControllerInterface {
   private readonly logger = new Logger('WebhookController');
@@ -41,6 +42,8 @@ export class WebhookController extends EventController implements EventControlle
         headers: data.webhook?.headers,
         webhookBase64: data.webhook.base64,
         webhookByEvents: data.webhook.byEvents,
+        excludeFields: data.webhook?.excludeFields,
+        includeFields: data.webhook?.includeFields,
       },
       create: {
         enabled: data.webhook?.enabled,
@@ -50,6 +53,8 @@ export class WebhookController extends EventController implements EventControlle
         headers: data.webhook?.headers,
         webhookBase64: data.webhook.base64,
         webhookByEvents: data.webhook.byEvents,
+        excludeFields: data.webhook?.excludeFields,
+        includeFields: data.webhook?.includeFields,
       },
     });
   }
@@ -104,6 +109,12 @@ export class WebhookController extends EventController implements EventControlle
 
     if (local && instance?.enabled) {
       if (Array.isArray(webhookLocal) && webhookLocal.includes(we)) {
+        const filteredData = filterWebhookPayload(data, {
+          excludeFields: instance?.excludeFields,
+          includeFields: instance?.includeFields,
+        });
+        const localWebhookData = filteredData === data ? webhookData : { ...webhookData, data: filteredData };
+
         let baseURL: string;
 
         if (instance?.webhookByEvents) {
@@ -116,7 +127,7 @@ export class WebhookController extends EventController implements EventControlle
           const logData = {
             local: `${origin}.sendData-Webhook`,
             url: baseURL,
-            ...webhookData,
+            ...localWebhookData,
           };
 
           this.logger.log(logData);
@@ -141,7 +152,13 @@ export class WebhookController extends EventController implements EventControlle
               timeout: webhookConfig.REQUEST?.TIMEOUT_MS ?? 30000,
             });
 
-            await this.retryWebhookRequest(httpService, webhookData, `${origin}.sendData-Webhook`, baseURL, serverUrl);
+            await this.retryWebhookRequest(
+              httpService,
+              localWebhookData,
+              `${origin}.sendData-Webhook`,
+              baseURL,
+              serverUrl,
+            );
           }
         } catch (error) {
           this.logger.error({

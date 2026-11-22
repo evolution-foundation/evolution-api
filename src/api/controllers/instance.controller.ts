@@ -180,6 +180,8 @@ export class InstanceController {
             webhookHeaders: instanceData?.webhook?.headers,
             webhookByEvents: instanceData?.webhook?.byEvents,
             webhookBase64: instanceData?.webhook?.base64,
+            excludeFields: instanceData?.webhook?.excludeFields,
+            includeFields: instanceData?.webhook?.includeFields,
           },
           websocket: {
             enabled: instanceData?.websocket?.enabled,
@@ -274,6 +276,8 @@ export class InstanceController {
           webhookHeaders: instanceData?.webhook?.headers,
           webhookByEvents: instanceData?.webhook?.byEvents,
           webhookBase64: instanceData?.webhook?.base64,
+          excludeFields: instanceData?.webhook?.excludeFields,
+          includeFields: instanceData?.webhook?.includeFields,
         },
         websocket: {
           enabled: instanceData?.websocket?.enabled,

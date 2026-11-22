@@ -9,6 +9,8 @@ export class EventDto {
     headers?: JsonValue;
     byEvents?: boolean;
     base64?: boolean;
+    excludeFields?: string[];
+    includeFields?: string[];
   };
 
   websocket?: {
@@ -56,6 +58,8 @@ export function EventInstanceMixin<TBase extends Constructor>(Base: TBase) {
       url?: string;
       byEvents?: boolean;
       base64?: boolean;
+      excludeFields?: string[];
+      includeFields?: string[];
     };
 
     websocket?: {

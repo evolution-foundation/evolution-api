@@ -37,6 +37,8 @@ export class InstanceDto extends IntegrationDto {
     url?: string;
     byEvents?: boolean;
     base64?: boolean;
+    excludeFields?: string[];
+    includeFields?: string[];
   };
   chatwootAccountId?: string;
   chatwootConversationPending?: boolean;

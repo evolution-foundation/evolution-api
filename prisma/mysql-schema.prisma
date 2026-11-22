@@ -207,6 +207,8 @@ model Webhook {
   events          Json?     @db.Json
   webhookByEvents Boolean?  @default(false)
   webhookBase64   Boolean?  @default(false)
+  excludeFields   Json?     @db.Json
+  includeFields   Json?     @db.Json
   createdAt       DateTime? @default(dbgenerated("CURRENT_TIMESTAMP")) @db.Timestamp
   updatedAt       DateTime  @updatedAt @db.Timestamp
   Instance        Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)
