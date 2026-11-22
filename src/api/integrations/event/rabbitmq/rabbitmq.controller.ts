@@ -7,7 +7,7 @@ import * as amqp from 'amqplib/callback_api';
 import { EmitData, EventController, EventControllerInterface } from '../event.controller';
 
 export class RabbitmqController extends EventController implements EventControllerInterface {
-  public amqpChannel: amqp.Channel | null = null;
+  public amqpChannel: amqp.ConfirmChannel | null = null;
   private amqpConnection: amqp.Connection | null = null;
   private readonly logger = new Logger('RabbitmqController');
   private reconnectAttempts = 0;
@@ -71,11 +71,11 @@ export class RabbitmqController extends EventController implements EventControll
           this.handleConnectionLoss();
         });
 
-        connection.createChannel((channelError: Error, channel: amqp.Channel) => {
+        connection.createConfirmChannel((channelError: Error, channel: amqp.ConfirmChannel) => {
           if (channelError) {
             this.logger.error({
-              local: 'RabbitmqController.createChannel',
-              message: 'Failed to create RabbitMQ channel',
+              local: 'RabbitmqController.createConfirmChannel',
+              message: 'Failed to create RabbitMQ confirm channel',
               error: channelError.message || channelError,
             });
             reject(channelError);
@@ -180,11 +180,11 @@ export class RabbitmqController extends EventController implements EventControll
     }, delay);
   }
 
-  private set channel(channel: amqp.Channel) {
+  private set channel(channel: amqp.ConfirmChannel | null) {
     this.amqpChannel = channel;
   }
 
-  public get channel(): amqp.Channel {
+  public get channel(): amqp.ConfirmChannel | null {
     return this.amqpChannel;
   }
 
@@ -247,105 +247,174 @@ export class RabbitmqController extends EventController implements EventControll
     if (instanceRabbitmq?.enabled && this.amqpChannel) {
       if (Array.isArray(rabbitmqLocal) && rabbitmqLocal.includes(we)) {
         const exchangeName = instanceName ?? rabbitmqExchangeName;
+        const eventName = event.replace(/_/g, '.').toLowerCase();
+        const queueName = `${instanceName}.${eventName}`;
 
-        let retry = 0;
-
-        while (retry < 3) {
-          try {
-            await this.amqpChannel.assertExchange(exchangeName, 'topic', {
-              durable: true,
-              autoDelete: false,
-            });
-
-            const eventName = event.replace(/_/g, '.').toLowerCase();
-
-            const queueName = `${instanceName}.${eventName}`;
-
-            await this.amqpChannel.assertQueue(queueName, {
-              durable: true,
-              autoDelete: false,
-              arguments: {
-                'x-queue-type': 'quorum',
-              },
-            });
-
-            await this.amqpChannel.bindQueue(queueName, exchangeName, eventName);
-
-            await this.amqpChannel.publish(exchangeName, event, Buffer.from(JSON.stringify(message)));
-
-            if (logEnabled) {
-              const logData = {
-                local: `${origin}.sendData-RabbitMQ`,
-                ...message,
-              };
-
-              this.logger.log(logData);
-            }
-
-            break;
-          } catch (error) {
-            this.logger.error({
-              local: 'RabbitmqController.emit',
-              message: `Error publishing local RabbitMQ message (attempt ${retry + 1}/3)`,
-              error: error.message || error,
-            });
-            retry++;
-            if (retry >= 3) {
-              this.handleConnectionLoss();
-            }
-          }
-        }
+        await this.publishWithRetry({
+          exchangeName,
+          queueName,
+          bindingKey: eventName,
+          routingKey: event,
+          message,
+          logEnabled,
+          logLocal: `${origin}.sendData-RabbitMQ`,
+          targetLabel: 'local',
+        });
       }
     }
 
     if (rabbitmqGlobal && rabbitmqEvents[we] && this.amqpChannel) {
       const exchangeName = rabbitmqExchangeName;
+      const eventName = event.replace(/_/g, '.').toLowerCase();
+      const queueName = prefixKey ? `${prefixKey}.${eventName}` : eventName;
 
-      let retry = 0;
+      await this.publishWithRetry({
+        exchangeName,
+        queueName,
+        bindingKey: event,
+        routingKey: event,
+        message,
+        logEnabled,
+        logLocal: `${origin}.sendData-RabbitMQ-Global`,
+        targetLabel: 'global',
+      });
+    }
+  }
 
-      while (retry < 3) {
-        try {
-          await this.amqpChannel.assertExchange(exchangeName, 'topic', {
-            durable: true,
-            autoDelete: false,
-          });
+  /**
+   * Publishes a persistent message and awaits broker confirmation (and drain on backpressure).
+   */
+  private publishWithConfirm(exchange: string, routingKey: string, content: Buffer): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const channel = this.amqpChannel;
+      if (!channel) {
+        reject(new Error('AMQP confirm channel is not available'));
+        return;
+      }
 
-          const queueName = prefixKey
-            ? `${prefixKey}.${event.replace(/_/g, '.').toLowerCase()}`
-            : event.replace(/_/g, '.').toLowerCase();
+      let settled = false;
+      let confirmed = false;
+      let drained = false;
 
-          await this.amqpChannel.assertQueue(queueName, {
-            durable: true,
-            autoDelete: false,
-            arguments: {
-              'x-queue-type': 'quorum',
-            },
-          });
+      const onDrain = () => {
+        drained = true;
+        tryResolve();
+      };
 
-          await this.amqpChannel.bindQueue(queueName, exchangeName, event);
+      const onError = (err: Error) => {
+        finish(err || new Error('AMQP channel error during publish'));
+      };
 
-          await this.amqpChannel.publish(exchangeName, event, Buffer.from(JSON.stringify(message)));
+      const onClose = () => {
+        finish(new Error('AMQP channel closed during publish'));
+      };
 
-          if (logEnabled) {
-            const logData = {
-              local: `${origin}.sendData-RabbitMQ-Global`,
-              ...message,
-            };
+      const cleanupListeners = () => {
+        channel.removeListener('drain', onDrain);
+        channel.removeListener('error', onError);
+        channel.removeListener('close', onClose);
+      };
 
-            this.logger.log(logData);
-          }
+      const finish = (err?: Error | null) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanupListeners();
+        if (err) {
+          reject(err);
+        } else {
+          resolve();
+        }
+      };
 
+      const tryResolve = () => {
+        if (confirmed && drained) {
+          finish();
+        }
+      };
+
+      const published = channel.publish(exchange, routingKey, content, { persistent: true }, (err?: Error) => {
+        if (err) {
+          finish(err);
+          return;
+        }
+        confirmed = true;
+        tryResolve();
+      });
+
+      if (published) {
+        drained = true;
+        tryResolve();
+      } else if (!settled) {
+        channel.once('drain', onDrain);
+        channel.once('error', onError);
+        channel.once('close', onClose);
+      }
+    });
+  }
+
+  /**
+   * Asserts exchange/queue/binding and publishes with publisher confirms, retrying up to 3 times.
+   */
+  private async publishWithRetry(params: {
+    exchangeName: string;
+    queueName: string;
+    bindingKey: string;
+    routingKey: string;
+    message: Record<string, any>;
+    logEnabled: boolean;
+    logLocal: string;
+    targetLabel: 'local' | 'global';
+  }): Promise<void> {
+    const { exchangeName, queueName, bindingKey, routingKey, message, logEnabled, logLocal, targetLabel } = params;
+    let retry = 0;
+
+    while (retry < 3) {
+      if (!this.amqpChannel) {
+        break;
+      }
+
+      try {
+        await this.amqpChannel.assertExchange(exchangeName, 'topic', {
+          durable: true,
+          autoDelete: false,
+        });
+
+        await this.amqpChannel.assertQueue(queueName, {
+          durable: true,
+          autoDelete: false,
+          arguments: {
+            'x-queue-type': 'quorum',
+          },
+        });
+
+        await this.amqpChannel.bindQueue(queueName, exchangeName, bindingKey);
+
+        await this.publishWithConfirm(exchangeName, routingKey, Buffer.from(JSON.stringify(message)));
+
+        if (logEnabled) {
+          const logData = {
+            local: logLocal,
+            ...message,
+          };
+
+          this.logger.log(logData);
+        }
+
+        break;
+      } catch (error) {
+        this.logger.error({
+          local: 'RabbitmqController.emit',
+          message: `Error publishing ${targetLabel} RabbitMQ message (attempt ${retry + 1}/3)`,
+          error: error?.message || error,
+        });
+        retry++;
+        if (!this.amqpChannel) {
           break;
-        } catch (error) {
-          this.logger.error({
-            local: 'RabbitmqController.emit',
-            message: `Error publishing global RabbitMQ message (attempt ${retry + 1}/3)`,
-            error: error.message || error,
-          });
-          retry++;
-          if (retry >= 3) {
-            this.handleConnectionLoss();
-          }
+        }
+        if (retry >= 3) {
+          this.handleConnectionLoss();
         }
       }
     }
@@ -409,14 +478,17 @@ export class RabbitmqController extends EventController implements EventControll
   }
 
   public async cleanup(): Promise<void> {
+    const channel = this.amqpChannel;
+    const connection = this.amqpConnection;
+    this.amqpChannel = null;
+    this.amqpConnection = null;
+
     try {
-      if (this.amqpChannel) {
-        await this.amqpChannel.close();
-        this.amqpChannel = null;
+      if (channel) {
+        await channel.close();
       }
-      if (this.amqpConnection) {
-        await this.amqpConnection.close();
-        this.amqpConnection = null;
+      if (connection) {
+        await connection.close();
       }
     } catch (error) {
       this.logger.warn({
@@ -424,8 +496,6 @@ export class RabbitmqController extends EventController implements EventControll
         message: 'Error during cleanup',
         error: error.message || error,
       });
-      this.amqpChannel = null;
-      this.amqpConnection = null;
     }
   }
 }
