@@ -30,7 +30,7 @@ function normalizeFieldPaths(fields: unknown): string[][] {
   return paths;
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return false;
   }
@@ -43,7 +43,7 @@ function cloneValue<T>(value: T): T {
     return value.map((item) => cloneValue(item)) as unknown as T;
   }
   if (isPlainObject(value)) {
-    const cloned: Record<string, any> = {};
+    const cloned: Record<string, unknown> = {};
     for (const key of Object.keys(value)) {
       cloned[key] = cloneValue(value[key]);
     }
@@ -52,7 +52,12 @@ function cloneValue<T>(value: T): T {
   return value;
 }
 
-function pickPath(source: any, target: any, segments: string[], index: number): { matched: boolean; value: any } {
+function pickPath(
+  source: unknown,
+  target: unknown,
+  segments: string[],
+  index: number,
+): { matched: boolean; value: unknown } {
   if (index >= segments.length) {
     return { matched: true, value: cloneValue(source) };
   }
@@ -64,7 +69,7 @@ function pickPath(source: any, target: any, segments: string[], index: number): 
   const key = segments[index];
 
   if (Array.isArray(source)) {
-    const result = Array.isArray(target) ? [...target] : new Array(source.length);
+    const result: unknown[] = Array.isArray(target) ? [...target] : new Array(source.length);
     let anyMatched = false;
 
     if (/^\d+$/.test(key)) {
@@ -94,8 +99,8 @@ function pickPath(source: any, target: any, segments: string[], index: number): 
     return { matched: false, value: target };
   }
 
-  const container = isPlainObject(target) ? target : {};
-  const sub = pickPath(source[key], container[key], segments, index + 1);
+  const container: Record<string, unknown> = isPlainObject(target) ? target : {};
+  const sub = pickPath((source as Record<string, unknown>)[key], container[key], segments, index + 1);
   if (!sub.matched) {
     return { matched: false, value: target };
   }
@@ -104,7 +109,7 @@ function pickPath(source: any, target: any, segments: string[], index: number): 
   return { matched: true, value: container };
 }
 
-function omitPath(target: any, segments: string[], index: number): void {
+function omitPath(target: unknown, segments: string[], index: number): void {
   if (target === null || target === undefined || typeof target !== 'object' || index >= segments.length) {
     return;
   }
@@ -130,6 +135,10 @@ function omitPath(target: any, segments: string[], index: number): void {
     return;
   }
 
+  if (!isPlainObject(target)) {
+    return;
+  }
+
   if (!Object.prototype.hasOwnProperty.call(target, key)) {
     return;
   }
@@ -142,9 +151,9 @@ function omitPath(target: any, segments: string[], index: number): void {
   omitPath(target[key], segments, index + 1);
 }
 
-function pruneArrays(value: any, shouldKeep: (arr: any[], index: number) => boolean): any {
+function pruneArrays(value: unknown, shouldKeep: (arr: unknown[], index: number) => boolean): unknown {
   if (Array.isArray(value)) {
-    const result: any[] = [];
+    const result: unknown[] = [];
     for (let i = 0; i < value.length; i++) {
       if (shouldKeep(value, i)) {
         result.push(pruneArrays(value[i], shouldKeep));
@@ -167,23 +176,31 @@ function pruneArrays(value: any, shouldKeep: (arr: any[], index: number) => bool
  *
  * When no filters are configured, the original `data` reference is returned unchanged.
  */
-export function filterWebhookPayload<T>(data: T, options?: WebhookPayloadFilterOptions): T {
+export function filterWebhookPayload<T>(
+  data: T,
+  options?: WebhookPayloadFilterOptions,
+): T | Partial<T> | Record<string, unknown> {
   if (data === null || data === undefined || typeof data !== 'object') {
     return data;
   }
 
+  const hasIncludeFilter = Array.isArray(options?.includeFields) && options.includeFields.length > 0;
   const includePaths = normalizeFieldPaths(options?.includeFields);
   const excludePaths = normalizeFieldPaths(options?.excludeFields);
+
+  if (hasIncludeFilter && includePaths.length === 0) {
+    return (Array.isArray(data) ? [] : {}) as T | Partial<T> | Record<string, unknown>;
+  }
 
   if (includePaths.length === 0 && excludePaths.length === 0) {
     return data;
   }
 
-  let result: any;
+  let result: unknown;
 
   if (includePaths.length > 0) {
     const initialTarget = Array.isArray(data) ? [] : {};
-    let picked: any = initialTarget;
+    let picked: unknown = initialTarget;
     let anyMatched = false;
 
     for (const segments of includePaths) {
@@ -210,5 +227,5 @@ export function filterWebhookPayload<T>(data: T, options?: WebhookPayloadFilterO
     result = pruneArrays(result, (arr, i) => arr[i] !== DELETED);
   }
 
-  return result as T;
+  return result as T | Partial<T> | Record<string, unknown>;
 }

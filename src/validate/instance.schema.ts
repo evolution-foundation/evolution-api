@@ -51,6 +51,39 @@ export const instanceSchema: JSONSchema7 = {
     proxyUsername: { type: 'string' },
     proxyPassword: { type: 'string' },
     // Webhook
+    webhook: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean' },
+        url: { type: 'string' },
+        headers: { type: 'object' },
+        byEvents: { type: 'boolean' },
+        base64: { type: 'boolean' },
+        excludeFields: {
+          type: 'array',
+          minItems: 0,
+          items: {
+            type: 'string',
+            minLength: 1,
+          },
+        },
+        includeFields: {
+          type: 'array',
+          minItems: 0,
+          items: {
+            type: 'string',
+            minLength: 1,
+          },
+        },
+        events: {
+          type: 'array',
+          minItems: 0,
+          items: {
+            type: 'string',
+          },
+        },
+      },
+    },
     webhookUrl: { type: 'string' },
     webhookByEvents: { type: 'boolean' },
     webhookBase64: { type: 'boolean' },

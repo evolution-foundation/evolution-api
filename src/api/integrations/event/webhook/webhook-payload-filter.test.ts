@@ -48,7 +48,7 @@ describe('filterWebhookPayload', () => {
 
     const filtered = filterWebhookPayload(payload, {
       excludeFields: ['base64', 'message.imageMessage', 'nonExistent.nested'],
-    });
+    }) as typeof payload;
 
     assert.notEqual(filtered, payload);
     assert.deepEqual(payload, snapshot);
@@ -194,5 +194,62 @@ describe('filterWebhookPayload', () => {
     assert.deepEqual(mixedIndexAndNested, {
       items: [{ id: 1, secret: 's1' }, { id: 2 }],
     });
+  });
+
+  it('fails closed with {} or [] when includeFields is non-empty but all paths are invalid', () => {
+    const objectPayload = createSampleMessagePayload();
+    const objectSnapshot = structuredClone(objectPayload);
+
+    assert.deepEqual(filterWebhookPayload(objectPayload, { includeFields: ['__proto__'] }), {});
+    assert.deepEqual(filterWebhookPayload(objectPayload, { includeFields: [''] }), {});
+    assert.deepEqual(
+      filterWebhookPayload(objectPayload, {
+        includeFields: ['   ', null as any, 123 as any, 'constructor.prototype'],
+        excludeFields: ['pushName'],
+      }),
+      {},
+    );
+    assert.deepEqual(objectPayload, objectSnapshot);
+
+    const arrayPayload = [{ key: { id: '1' } }, { key: { id: '2' } }];
+    const arraySnapshot = structuredClone(arrayPayload);
+
+    assert.deepEqual(filterWebhookPayload(arrayPayload, { includeFields: ['__proto__'] }), []);
+    assert.deepEqual(filterWebhookPayload(arrayPayload, { includeFields: [''] }), []);
+    assert.deepEqual(arrayPayload, arraySnapshot);
+  });
+
+  it('preserves non-plain objects without mutating them under excludeFields', () => {
+    class CustomMeta {
+      secret: string;
+      label: string;
+
+      constructor(secret: string, label: string) {
+        this.secret = secret;
+        this.label = label;
+      }
+    }
+
+    const meta = new CustomMeta('top-secret', 'ok');
+    const createdAt = new Date('2026-01-01T00:00:00.000Z');
+    const payload = {
+      meta,
+      createdAt,
+      secret: 'remove-me',
+    };
+
+    const filtered = filterWebhookPayload(payload, {
+      excludeFields: ['secret', 'meta.secret'],
+    }) as Record<string, unknown>;
+
+    assert.equal('secret' in filtered, false);
+    assert.equal(filtered.meta, meta);
+    assert.equal(filtered.createdAt, createdAt);
+    assert.equal(meta.secret, 'top-secret');
+    assert.equal(meta.label, 'ok');
+
+    const topLevelFiltered = filterWebhookPayload(meta, { excludeFields: ['secret'] });
+    assert.equal(topLevelFiltered, meta);
+    assert.equal(meta.secret, 'top-secret');
   });
 });
