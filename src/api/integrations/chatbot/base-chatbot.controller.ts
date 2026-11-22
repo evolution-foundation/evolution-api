@@ -10,6 +10,7 @@ import { getConversationMessage } from '@utils/getConversationMessage';
 
 import { BaseChatbotDto } from './base-chatbot.dto';
 import { ChatbotController, ChatbotControllerInterface, EmitData } from './chatbot.controller';
+import { ChatbotMessageDeduplicator } from './chatbot-message-dedup';
 
 // Common settings interface for all chatbot integrations
 export interface ChatbotSettings {
@@ -59,6 +60,9 @@ export abstract class BaseChatbotController<BotType = any, BotData extends BaseC
   settingsRepository: any;
   sessionRepository: any;
   userMessageDebounce: { [key: string]: { message: string; timeoutId: NodeJS.Timeout } } = {};
+  protected messageDeduplicator = new ChatbotMessageDeduplicator({
+    logger: { warn: (message) => this.logger?.warn?.(message) },
+  });
 
   // Name of the integration, to be set by the derived class
   protected abstract readonly integrationName: string;
@@ -789,6 +793,21 @@ export abstract class BaseChatbotController<BotType = any, BotData extends BaseC
     if (!this.integrationEnabled) return;
 
     try {
+      const isDuplicate = await this.messageDeduplicator.isDuplicate({
+        integrationName: this.integrationName,
+        instanceId: instance?.instanceId,
+        instanceName: instance?.instanceName,
+        remoteJid: remoteJid ?? msg?.key?.remoteJid,
+        messageId: msg?.key?.id,
+      });
+
+      if (isDuplicate) {
+        this.logger?.verbose?.(
+          `Duplicate message ${msg?.key?.id} ignored for ${this.integrationName} (instance: ${instance?.instanceName ?? instance?.instanceId})`,
+        );
+        return;
+      }
+
       const settings = await this.settingsRepository.findFirst({
         where: {
           instanceId: instance.instanceId,
