@@ -58,6 +58,16 @@ export class ChatController {
     return await this.waMonitor.waInstances[instanceName].getBase64FromMediaMessage(data);
   }
 
+  // [PATCH fetch-history] Request older history for a chat (on-demand pull).
+  public async requestChatHistory({ instanceName }: InstanceDto, data: { remoteJid: string; count?: number }) {
+    return await this.waMonitor.waInstances[instanceName].requestChatHistory(data);
+  }
+
+  // [PATCH lid-resolve] Resolve @lid ids → real phone via Baileys lidMapping.
+  public async resolveLid({ instanceName }: InstanceDto, data: { lids: string[] }) {
+    return await this.waMonitor.waInstances[instanceName].resolveLid(data);
+  }
+
   public async fetchMessages({ instanceName }: InstanceDto, query: Query<Message>) {
     return await this.waMonitor.waInstances[instanceName].fetchMessages(query);
   }

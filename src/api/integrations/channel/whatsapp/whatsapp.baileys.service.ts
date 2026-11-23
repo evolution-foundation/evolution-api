@@ -258,6 +258,17 @@ export class BaileysStartupService extends ChannelStartupService {
 
   public stateConnection: wa.StateConnection = { state: 'close' };
 
+  // [PATCH sync-progress] Live WhatsApp history-sync progress, updated from the
+  // messaging-history.set handler (Baileys emits a real 0-100 `progress` + a final
+  // `isLatest`). Surfaced on the instanceInfo/fetchInstances response so a client
+  // can show a true progress bar instead of inferring from row counts.
+  public historySync: { progress: number; isLatest: boolean; syncing: boolean; updatedAt: number } = {
+    progress: 0,
+    isLatest: false,
+    syncing: false,
+    updatedAt: 0,
+  };
+
   public phoneNumber: string;
 
   public get connectionStatus() {
@@ -266,9 +277,24 @@ export class BaileysStartupService extends ChannelStartupService {
 
   public async logoutInstance() {
     this.messageProcessor.onDestroy();
-    await this.client?.logout('Log out instance: ' + this.instanceName);
+    // [PATCH logout-purge] client.logout() THROWS "Connection Closed" when the
+    // socket is already down (e.g. the user removed the device from their PHONE).
+    // Previously that error aborted logoutInstance BEFORE the credential purge
+    // below ran, so the Baileys auth creds survived and re-creating the (same,
+    // deterministic) instance name silently reconnected — "logout didn't work".
+    // Swallow logout errors so the purge ALWAYS runs; a failed WS logout on an
+    // already-closed socket is harmless.
+    try {
+      await this.client?.logout('Log out instance: ' + this.instanceName);
+    } catch (err) {
+      this.logger.warn(['logoutInstance: client.logout failed (already closed?)', (err as any)?.message]);
+    }
 
-    this.client?.ws?.close();
+    try {
+      this.client?.ws?.close();
+    } catch {
+      /* socket already closed */
+    }
 
     const db = this.configService.get<Database>('DATABASE');
     const cache = this.configService.get<CacheConf>('CACHE');
@@ -808,6 +834,38 @@ export class BaileysStartupService extends ChannelStartupService {
   private readonly contactHandle = {
     'contacts.upsert': async (contacts: Contact[]) => {
       try {
+        // [PATCH lid-map-store] Each synced Contact can carry BOTH its phone JID
+        // (contact.id = <phone>@s.whatsapp.net) AND its @lid (contact.lid). WhatsApp
+        // delivers this pairing during sync, but upstream discards contact.lid — so
+        // later we can't map an @lid chat back to the phone (and thus to YOUR saved
+        // address-book name). Feed every (lid, phone) pair we see into Baileys'
+        // lidMapping store so getPNForLID() can resolve them afterwards, AND persist
+        // an @lid Contact row carrying the same saved pushName as the phone row.
+        try {
+          const mapping = (this.client as any)?.signalRepository?.lidMapping;
+          const pairs = contacts
+            .filter((c: any) => c?.lid && c?.id?.includes('@s.whatsapp.net'))
+            .map((c: any) => ({ lid: c.lid, pn: c.id }));
+          if (pairs.length && mapping?.storeLIDPNMappings) {
+            await mapping.storeLIDPNMappings(pairs);
+          }
+          // Also persist an @lid Contact row that mirrors the saved name, so the
+          // DB name-resolver can bridge @lid → saved name directly.
+          const lidRows = contacts
+            .filter((c: any) => c?.lid && (c?.name || c?.verifiedName))
+            .map((c: any) => ({
+              remoteJid: c.lid,
+              pushName: c.name || c.verifiedName,
+              profilePicUrl: null,
+              instanceId: this.instanceId,
+            }));
+          if (lidRows.length && this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS) {
+            await this.prismaRepository.contact.createMany({ data: lidRows, skipDuplicates: true });
+          }
+        } catch (e) {
+          this.logger.warn(['lid-map-store: failed to persist LID↔PN mapping', (e as any)?.message]);
+        }
+
         const contactsRaw: any = contacts.map((contact) => ({
           remoteJid: contact.id,
           pushName: contact?.name || contact?.verifiedName || contact.id.split('@')[0],
@@ -947,6 +1005,15 @@ export class BaileysStartupService extends ChannelStartupService {
           `recv ${chats.length} chats, ${contacts.length} contacts, ${messages.length} msgs (is latest: ${isLatest}, progress: ${progress}%), type: ${syncType}`,
         );
 
+        // [PATCH sync-progress] Record the real Baileys history-sync progress so
+        // the instanceInfo response can surface a true % (syncing until isLatest).
+        this.historySync = {
+          progress: typeof progress === 'number' ? progress : this.historySync.progress,
+          isLatest: !!isLatest,
+          syncing: !isLatest,
+          updatedAt: Date.now(),
+        };
+
         const instance: InstanceDto = { instanceName: this.instance.name };
 
         let timestampLimitToImport = null;
@@ -1040,6 +1107,25 @@ export class BaileysStartupService extends ChannelStartupService {
               m.pushName = contactsMap.get(participantJid).name;
             } else if (participantJid) {
               m.pushName = participantJid.split('@')[0];
+            }
+          }
+
+          // [PATCH @lid-history] Bridge old @lid history chats to the real phone.
+          // We do NOT rewrite key.remoteJid (the Chat row is still keyed by @lid, so
+          // rewriting would orphan the message from its chat). Instead we ensure the
+          // real-phone mapping is PRESERVED on the stored key as remoteJidAlt, which
+          // is exactly what the downstream name-resolver reads to map @lid → your
+          // saved contact name/number. Baileys usually populates remoteJidAlt on the
+          // key already; when it instead carries the phone in senderPn/participantAlt
+          // (older shapes) we copy it across so history rows match the live path.
+          if (m.key?.remoteJid?.includes('@lid') && !m.key?.remoteJidAlt) {
+            const altPhone =
+              (m.key as any).senderPn ||
+              (m.key as any).participantAlt ||
+              (m.key as any).participantPn ||
+              null;
+            if (altPhone && String(altPhone).includes('@s.whatsapp.net')) {
+              m.key.remoteJidAlt = altPhone;
             }
           }
 
@@ -3832,6 +3918,95 @@ export class BaileysStartupService extends ChannelStartupService {
       ptvMessage: 'video',
     };
     return map[mediaType] || null;
+  }
+
+  // [PATCH fetch-history] On-demand older-history pull. WhatsApp's initial
+  // multi-device sync only delivers a bounded window per chat, so old messages of
+  // a specific chat can be missing even when the DB has years of other chats.
+  // fetchMessageHistory(count, oldestKey, oldestTimestamp) asks WhatsApp for
+  // messages OLDER than the given anchor; the results arrive asynchronously via
+  // the normal messaging-history.set handler (ON_DEMAND syncType) and get saved
+  // like any other history. We anchor on the OLDEST message we currently have for
+  // the chat. Call repeatedly (each call walks further back) until no new older
+  // messages arrive. Returns { requested, oldestTimestamp } or { requested:false }
+  // when there's nothing to anchor on.
+  public async requestChatHistory({ remoteJid, count }: { remoteJid: string; count?: number }) {
+    const want = Math.min(Math.max(Number(count) || 50, 1), 50); // Baileys caps at 50/req
+    // Find the oldest stored message for this chat to use as the "before" anchor.
+    const oldest = await this.prismaRepository.message.findFirst({
+      where: { instanceId: this.instanceId, key: { path: ['remoteJid'], equals: remoteJid } },
+      orderBy: { messageTimestamp: 'asc' },
+    });
+    if (!oldest) {
+      return { requested: false, reason: 'no messages stored for this chat to anchor on' };
+    }
+    const key = oldest.key as any;
+    const ts = Number(oldest.messageTimestamp);
+    try {
+      const requestId = await this.client.fetchMessageHistory(want, key, ts);
+      return { requested: true, requestId, anchorTimestamp: ts, anchorMessageId: key?.id ?? null };
+    } catch (err) {
+      this.logger.error(['requestChatHistory failed', (err as any)?.message]);
+      return { requested: false, reason: (err as any)?.message ?? 'fetchMessageHistory failed' };
+    }
+  }
+
+  // [PATCH lid-resolve] Resolve one or more @lid privacy ids to their REAL phone.
+  // Two bridges, in order:
+  //   1. Baileys' live LID↔PN mapping (signalRepository.lidMapping.getPNForLID)
+  //   2. DEEP message scan — search EVERY stored message of the chat for any
+  //      field that can carry the phone (key.remoteJidAlt / senderPn /
+  //      participantAlt / participantPn, contextInfo.participant). WhatsApp leaks
+  //      the PN in different places depending on message age/direction, so one
+  //      SQL over the whole history recovers numbers the live mapping misses.
+  // Returns { "<lid>": "<phone digits>" | null }.
+  public async resolveLid({ lids }: { lids: string[] }) {
+    const out: Record<string, string | null> = {};
+    const mapping = (this.client as any)?.signalRepository?.lidMapping;
+    const clean = (jid: any): string | null => {
+      const digits = jid ? String(jid).split('@')[0].split(':')[0].replace(/\D/g, '') : '';
+      return digits.length >= 8 && digits.length <= 15 ? digits : null; // reject "0"/junk
+    };
+    for (const raw of Array.isArray(lids) ? lids : []) {
+      const lid = String(raw || '');
+      if (!lid) continue;
+      if (!lid.endsWith('@lid')) {
+        out[lid] = clean(lid); // already a phone JID / bare number
+        continue;
+      }
+      // Bridge 1: live Baileys mapping.
+      let phone: string | null = null;
+      try {
+        const pn = mapping?.getPNForLID ? await mapping.getPNForLID(lid) : null;
+        phone = clean(pn);
+      } catch { /* mapping miss */ }
+      // Bridge 2: deep scan of the chat's stored messages for any PN-carrying field.
+      if (!phone) {
+        try {
+          const rows: any[] = await this.prismaRepository.$queryRaw`
+            SELECT COALESCE(
+              NULLIF(split_part("key"->>'remoteJidAlt','@',1), ''),
+              NULLIF(split_part("key"->>'senderPn','@',1), ''),
+              NULLIF(split_part("key"->>'participantAlt','@',1), ''),
+              NULLIF(split_part("key"->>'participantPn','@',1), ''),
+              NULLIF(split_part("contextInfo"->>'participant','@',1), '')
+            ) AS phone
+            FROM "Message"
+            WHERE "instanceId" = ${this.instanceId} AND "key"->>'remoteJid' = ${lid}
+              AND (
+                "key"->>'remoteJidAlt'        LIKE '%@s.whatsapp.net' OR
+                "key"->>'senderPn'            LIKE '%@s.whatsapp.net' OR
+                "key"->>'participantAlt'      LIKE '%@s.whatsapp.net' OR
+                "key"->>'participantPn'       LIKE '%@s.whatsapp.net' OR
+                "contextInfo"->>'participant' LIKE '%@s.whatsapp.net'
+              )
+            LIMIT 1`;
+          phone = clean(rows?.[0]?.phone);
+        } catch { /* raw scan unavailable → leave null */ }
+      }
+      out[lid] = phone;
+    }
+    return out;
   }
 
   public async getBase64FromMediaMessage(data: getBase64FromMediaMessageDto, getBuffer = false) {

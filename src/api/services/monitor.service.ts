@@ -126,7 +126,16 @@ export class WAMonitoringService {
       },
     });
 
-    return instances;
+    // [PATCH sync-progress] Attach the live in-memory history-sync progress (real
+    // Baileys 0-100 %) from the running instance to each row, so clients get a
+    // true progress bar without inferring from row counts.
+    return instances.map((instance) => {
+      const live = this.waInstances[instance.name] as any;
+      return {
+        ...instance,
+        historySync: live?.historySync ?? { progress: 0, isLatest: false, syncing: false, updatedAt: 0 },
+      };
+    });
   }
 
   public async instanceInfoById(instanceId?: string, number?: string) {
