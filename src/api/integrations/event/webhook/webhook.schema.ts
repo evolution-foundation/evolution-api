@@ -34,6 +34,22 @@ export const webhookSchema: JSONSchema7 = {
         headers: { type: 'object' },
         byEvents: { type: 'boolean' },
         base64: { type: 'boolean' },
+        excludeFields: {
+          type: 'array',
+          minItems: 0,
+          items: {
+            type: 'string',
+            minLength: 1,
+          },
+        },
+        includeFields: {
+          type: 'array',
+          minItems: 0,
+          items: {
+            type: 'string',
+            minLength: 1,
+          },
+        },
         events: {
           type: 'array',
           minItems: 0,
