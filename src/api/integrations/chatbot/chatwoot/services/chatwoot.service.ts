@@ -57,6 +57,9 @@ export class ChatwootService {
   private lidToPhoneMap: Map<string, { phone: string; timestamp: number }> = new Map();
   private readonly LID_CACHE_TTL_MS = 3600000; // 1 hora
 
+  // Chatwoot URLs whose conversation filter does not accept contact_id (versions before 2026-06)
+  private readonly contactFilterUnsupported = new Set<string>();
+
   constructor(
     private readonly waMonitor: WAMonitoringService,
     private readonly configService: ConfigService,
@@ -839,10 +842,7 @@ export class ChatwootService {
         const contactId = contact?.payload?.id || contact?.payload?.contact?.id || contact?.id;
         this.logger.verbose(`Contact ID: ${contactId}`);
 
-        const contactConversations = (await client.contacts.listConversations({
-          accountId: this.provider.accountId,
-          id: contactId,
-        })) as any;
+        const contactConversations = await this.listContactConversationsInInbox(client, contactId, filterInbox.id);
 
         if (!contactConversations || !contactConversations.payload) {
           this.logger.error(`No conversations found or payload is undefined`);
@@ -1013,6 +1013,63 @@ export class ChatwootService {
     return message;
   }
 
+  /**
+   * Lists the contact's conversations in a single inbox, most recent activity first.
+   *
+   * The contact conversations endpoint returns at most 20 conversations across all inboxes,
+   * so a contact present in more than 20 inboxes (e.g. a group shared by many instances)
+   * may not have its conversation for this inbox in the list, and a duplicate gets created.
+   * Filtering by contact_id and inbox_id avoids that. Chatwoot versions without the
+   * contact_id filter fall back to the old endpoint.
+   */
+  private async listContactConversationsInInbox(
+    client: ChatwootClient,
+    contactId: number | string,
+    inboxId: number | string,
+  ): Promise<{ payload: any[] } | null> {
+    const providerUrl = this.provider.url;
+
+    if (!this.contactFilterUnsupported.has(providerUrl)) {
+      try {
+        const filtered = (await client.conversations.filter({
+          accountId: this.provider.accountId,
+          payload: [
+            {
+              attribute_key: 'contact_id',
+              filter_operator: 'equal_to',
+              values: [Number(contactId)],
+              query_operator: 'and',
+            },
+            {
+              attribute_key: 'inbox_id',
+              filter_operator: 'equal_to',
+              values: [Number(inboxId)],
+            },
+          ] as any,
+        })) as any;
+
+        if (filtered?.payload) {
+          return filtered;
+        }
+      } catch (error) {
+        const status = error?.status;
+        if (status === 400 || status === 422) {
+          this.logger.warn(
+            `Chatwoot at ${providerUrl} does not support filtering conversations by contact_id, using contact conversations endpoint`,
+          );
+          this.contactFilterUnsupported.add(providerUrl);
+        } else {
+          this.logger.error(`Error filtering conversations by contact and inbox: ${error}`);
+        }
+      }
+    }
+
+    return (await client.contacts.listConversations({
+      accountId: this.provider.accountId,
+      id: Number(contactId),
+    })) as any;
+  }
+
   public async getOpenConversationByContact(
     instance: InstanceDto,
     inbox: inbox,
@@ -1025,13 +1082,10 @@ export class ChatwootService {
       return null;
     }
 
-    const conversations = (await client.contacts.listConversations({
-      accountId: this.provider.accountId,
-      id: contact.id,
-    })) as any;
+    const conversations = await this.listContactConversationsInInbox(client, contact.id, inbox.id);
 
     return (
-      conversations.payload.find(
+      conversations?.payload?.find(
         (conversation) => conversation.inbox_id === inbox.id && conversation.status === 'open',
       ) || undefined
     );
