@@ -1,3 +1,18 @@
+# 2.3.8 (2026-11-23)
+
+### Fixed
+
+* **Baileys Status Stanzas**: Acknowledge the top-level `<status>` stanzas WhatsApp now sends for contacts' statuses
+  - Fixes instances that stay `open` and can send but stop receiving messages, or receive them hours late
+  - Fixes the connection dropping with `stream errored out` (`ack class="status"`) roughly every 50 minutes
+  - Held-back messages are delivered after updating, without scanning the QR code again
+  - A failed status ack no longer stops the processing of offline messages
+  - Applied as a `patch-package` patch to Baileys `7.0.0-rc.9`; the Docker image applies it at build time
+
+### Chore
+
+* **Build**: Add `patch-package` with a `postinstall` hook, and copy `patches/` into the Docker builder before `npm ci`
+
 # 2.3.7 (2025-12-05)
 
 ### Features
