@@ -656,6 +656,16 @@ export class BaileysStartupService extends ChannelStartupService {
       if (full) {
         return webMessageInfo[0];
       }
+
+      // Baileys answers retry receipts with whatever getMessage returns. A message revoked with
+      // "delete for everyone" keeps its content in the Message table, so returning it here makes
+      // the deleted text reappear for the members whose devices ask for a retry.
+      if (await this.isMessageDeleted(key.id, webMessageInfo[0])) {
+        this.logger.verbose(`getMessage: message ${key.id} was deleted, skipping retry resend`);
+
+        return undefined;
+      }
+
       if (webMessageInfo[0].message?.pollCreationMessage) {
         const messageSecretBase64 = webMessageInfo[0].message?.messageContextInfo?.messageSecret;
 
@@ -675,6 +685,28 @@ export class BaileysStartupService extends ChannelStartupService {
     } catch {
       return { conversation: '' };
     }
+  }
+
+  // deleteMessage and the messages.update revoke mark the row as DELETED and record a 'DELETED' MessageUpdate.
+  // The row mark can be overwritten later (a protocolMessage revoke arriving through messages.upsert writes
+  // EDITED, an ack writes its status), so the MessageUpdate is checked too. It is matched by instance + key id,
+  // not messageId: before deleteMessage was scoped to the instance, its MessageUpdate could point at another
+  // instance's copy of the message.
+  private async isMessageDeleted(keyId: string, row: any): Promise<boolean> {
+    if (!row) {
+      return false;
+    }
+
+    if (row.status === 'DELETED' || row.key?.deleted === true) {
+      return true;
+    }
+
+    const deletion = await this.prismaRepository.messageUpdate.findFirst({
+      where: { instanceId: this.instanceId, keyId, status: 'DELETED' },
+      select: { id: true },
+    });
+
+    return !!deletion;
   }
 
   private async defineAuthState() {
@@ -1889,8 +1921,23 @@ export class BaileysStartupService extends ChannelStartupService {
           if (update.message === null && update.status === undefined) {
             this.sendDataWebhook(Events.MESSAGES_DELETE, { ...key, status: 'DELETED' });
 
+            // Marking the row lets getMessage refuse the resend even when SAVE_DATA.MESSAGE_UPDATE is off.
+            if (findMessage?.id) {
+              try {
+                await this.prismaRepository.message.update({
+                  where: { id: findMessage.id },
+                  data: { status: 'DELETED' },
+                });
+              } catch (error) {
+                this.logger.warn(
+                  `Failed to mark revoked message ${findMessage.id} as deleted: ${error?.message ?? error}`,
+                );
+              }
+            }
+
+            // Recorded as DELETED (not the SERVER_ACK fallback) so getMessage can refuse to resend it.
             if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE)
-              await this.prismaRepository.messageUpdate.create({ data: message });
+              await this.prismaRepository.messageUpdate.create({ data: { ...message, status: 'DELETED' } });
 
             if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
               this.chatwootService.eventWhatsapp(
@@ -4271,7 +4318,7 @@ export class BaileysStartupService extends ChannelStartupService {
         if (messageId) {
           const isLogicalDeleted = configService.get<Database>('DATABASE').DELETE_DATA.LOGICAL_MESSAGE_DELETE;
           let message = await this.prismaRepository.message.findFirst({
-            where: { key: { path: ['id'], equals: messageId } },
+            where: { instanceId: this.instanceId, key: { path: ['id'], equals: messageId } },
           });
           if (isLogicalDeleted) {
             if (!message) return response;
