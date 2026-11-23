@@ -1,6 +1,7 @@
 import { CacheService } from '@api/services/cache.service';
 import { Logger } from '@config/logger.config';
 import { AuthenticationCreds, AuthenticationState, initAuthCreds, proto, SignalDataTypeMap } from 'baileys';
+import { deserializeAppStateSyncKey } from './proto-helpers';
 
 export async function useMultiFileAuthStateRedisDb(
   instanceName: string,
@@ -60,9 +61,7 @@ export async function useMultiFileAuthStateRedisDb(
           await Promise.all(
             ids.map(async (id) => {
               let value = await readData(`${type}-${id}`);
-              if (type === 'app-state-sync-key' && value) {
-                value = proto.Message.AppStateSyncKeyData.create(value);
-              }
+              value = deserializeAppStateSyncKey(type, value);
 
               data[id] = value;
             }),

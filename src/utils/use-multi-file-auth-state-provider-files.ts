@@ -37,6 +37,7 @@
 import { ProviderFiles } from '@api/provider/sessions';
 import { Logger } from '@config/logger.config';
 import { AuthenticationCreds, AuthenticationState, BufferJSON, initAuthCreds, proto, SignalDataTypeMap } from 'baileys';
+import { deserializeAppStateSyncKey } from './proto-helpers';
 import { isNotEmpty } from 'class-validator';
 
 export type AuthState = {
@@ -115,9 +116,7 @@ export class AuthStateProvider {
             await Promise.all(
               ids.map(async (id) => {
                 let value = await readData(`${type}-${id}`);
-                if (type === 'app-state-sync-key' && value) {
-                  value = proto.Message.AppStateSyncKeyData.create(value);
-                }
+                value = deserializeAppStateSyncKey(type, value);
 
                 data[id] = value;
               }),

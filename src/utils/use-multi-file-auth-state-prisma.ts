@@ -4,6 +4,7 @@ import { CacheConf, configService } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 import { INSTANCE_DIR } from '@config/path.config';
 import { AuthenticationState, BufferJSON, initAuthCreds, WAProto as proto } from 'baileys';
+import { deserializeAppStateSyncKey } from './proto-helpers';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -181,9 +182,7 @@ export default async function useMultiFileAuthStatePrisma(
           await Promise.all(
             ids.map(async (id) => {
               let value = await readData(`${type}-${id}`);
-              if (type === 'app-state-sync-key' && value) {
-                value = proto.Message.AppStateSyncKeyData.create(value);
-              }
+              value = deserializeAppStateSyncKey(type, value);
 
               data[id] = value;
             }),
