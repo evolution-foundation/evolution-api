@@ -21,7 +21,17 @@ export type Cors = {
 
 export type LogBaileys = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
 
-export type LogLevel = 'ERROR' | 'WARN' | 'DEBUG' | 'INFO' | 'LOG' | 'VERBOSE' | 'DARK' | 'WEBHOOKS' | 'WEBSOCKET';
+export type LogLevel =
+  | 'ERROR'
+  | 'WARN'
+  | 'DEBUG'
+  | 'INFO'
+  | 'LOG'
+  | 'VERBOSE'
+  | 'DARK'
+  | 'WEBHOOKS'
+  | 'WEBSOCKET'
+  | 'WEBHOOKMETA';
 
 export type Log = {
   LEVEL: LogLevel[];

@@ -126,17 +126,48 @@ export class BusinessStartupService extends ChannelStartupService {
   public async connectToWhatsapp(data?: any): Promise<any> {
     if (!data) return;
 
-    const content = data.entry[0].changes[0].value;
+    const content = data?.entry?.[0]?.changes?.[0]?.value;
+
+    if (!content) {
+      this.logger.error('ChannelStartupService -> connectToWhatsapp -> webhook content not found');
+      return;
+    }
 
     try {
+      if (
+        Array.isArray(content.statuses) &&
+        content.statuses.length > 0 &&
+        !content.messages?.length &&
+        !content.message_echoes?.length
+      ) {
+        await this.eventHandler(content);
+        return;
+      }
+
+      const message = Array.isArray(content.messages) ? content.messages[0] : undefined;
+
+      const status = Array.isArray(content.statuses) ? content.statuses[0] : undefined;
+
+      const messageEcho = Array.isArray(content.message_echoes) ? content.message_echoes[0] : undefined;
+
+      const phoneNumber = message?.from ?? status?.recipient_id ?? messageEcho?.to;
+
+      if (!phoneNumber) {
+        this.logger.error(
+          'ChannelStartupService -> connectToWhatsapp -> phone number not found in messages, statuses or message_echoes',
+        );
+        return;
+      }
+
+      this.phoneNumber = createJid(phoneNumber);
+
       this.loadChatwoot();
 
-      this.eventHandler(content);
-
-      this.phoneNumber = createJid(content.messages ? content.messages[0].from : content.statuses[0]?.recipient_id);
+      await this.eventHandler(content);
     } catch (error) {
       this.logger.error(error);
-      throw new InternalServerErrorException(error?.toString());
+
+      throw new InternalServerErrorException(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -382,20 +413,23 @@ export class BusinessStartupService extends ChannelStartupService {
     return messageType;
   }
 
-  protected async messageHandle(received: any, database: Database, settings: any) {
+  protected async messageHandle(received: any, database: Database, settings: any, echoRecipient?: string) {
     try {
       let messageRaw: any;
       let pushName: any;
 
-      if (received.contacts) pushName = received.contacts[0].profile.name;
+      const receivedContact = received.contacts[0];
+      const remoteJid = receivedContact.profile?.phone || receivedContact.wa_id;
+
+      if (received.contacts) pushName = receivedContact.profile?.name || '';
 
       if (received.messages) {
         const message = received.messages[0]; // Añadir esta línea para definir message
 
         const key = {
           id: message.id,
-          remoteJid: this.phoneNumber,
-          fromMe: message.from === received.metadata.phone_number_id,
+          remoteJid: echoRecipient ?? this.phoneNumber,
+          fromMe: !!echoRecipient || message.from === received.metadata.phone_number_id,
         };
 
         if (message.type === 'sticker') {
@@ -668,7 +702,7 @@ export class BusinessStartupService extends ChannelStartupService {
 
         sendTelemetry(`received.message.${messageRaw.messageType ?? 'unknown'}`);
 
-        this.sendDataWebhook(Events.MESSAGES_UPSERT, messageRaw);
+        this.sendDataWebhook(Events.MESSAGES_UPSERT, echoRecipient ? { ...messageRaw, to: echoRecipient } : messageRaw);
 
         await chatbotController.emit({
           instance: { instanceName: this.instance.name, instanceId: this.instanceId },
@@ -698,11 +732,14 @@ export class BusinessStartupService extends ChannelStartupService {
         }
 
         const contact = await this.prismaRepository.contact.findFirst({
-          where: { instanceId: this.instanceId, remoteJid: key.remoteJid },
+          where: {
+            instanceId: this.instanceId,
+            remoteJid: echoRecipient ? { in: [key.remoteJid, remoteJid] } : key.remoteJid,
+          },
         });
 
         const contactRaw: any = {
-          remoteJid: received.contacts[0].profile.phone,
+          remoteJid: echoRecipient && contact ? contact.remoteJid : remoteJid,
           pushName,
           // profilePicUrl: '',
           instanceId: this.instanceId,
@@ -713,13 +750,6 @@ export class BusinessStartupService extends ChannelStartupService {
         }
 
         if (contact) {
-          const contactRaw: any = {
-            remoteJid: received.contacts[0].profile.phone,
-            pushName,
-            // profilePicUrl: '',
-            instanceId: this.instanceId,
-          };
-
           this.sendDataWebhook(Events.CONTACTS_UPDATE, contactRaw);
 
           if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
@@ -731,7 +761,7 @@ export class BusinessStartupService extends ChannelStartupService {
           }
 
           await this.prismaRepository.contact.updateMany({
-            where: { remoteJid: contact.remoteJid },
+            where: { instanceId: this.instanceId, remoteJid: contact.remoteJid },
             data: contactRaw,
           });
           return;
@@ -743,83 +773,123 @@ export class BusinessStartupService extends ChannelStartupService {
           data: contactRaw,
         });
       }
-      if (received.statuses) {
-        for await (const item of received.statuses) {
-          const key = {
-            id: item.id,
-            remoteJid: this.phoneNumber,
-            fromMe: this.phoneNumber === received.metadata.phone_number_id,
-          };
-          if (settings?.groups_ignore && key.remoteJid.includes('@g.us')) {
-            return;
-          }
-          if (key.remoteJid !== 'status@broadcast' && !key?.remoteJid?.match(/(:\d+)/)) {
-            const findMessage = await this.prismaRepository.message.findFirst({
-              where: {
-                instanceId: this.instanceId,
-                key: {
-                  path: ['id'],
-                  equals: key.id,
-                },
-              },
-            });
-
-            if (!findMessage) {
-              return;
-            }
-
-            if (item.message === null && item.status === undefined) {
-              this.sendDataWebhook(Events.MESSAGES_DELETE, key);
-
-              const message: any = {
-                messageId: findMessage.id,
-                keyId: key.id,
-                remoteJid: key.remoteJid,
-                fromMe: key.fromMe,
-                participant: key?.remoteJid,
-                status: 'DELETED',
-                instanceId: this.instanceId,
-              };
-
-              await this.prismaRepository.messageUpdate.create({
-                data: message,
-              });
-
-              if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
-                this.chatwootService.eventWhatsapp(
-                  Events.MESSAGES_DELETE,
-                  { instanceName: this.instance.name, instanceId: this.instanceId },
-                  { key: key },
-                );
-              }
-
-              return;
-            }
-
-            const message: any = {
-              messageId: findMessage.id,
-              keyId: key.id,
-              remoteJid: key.remoteJid,
-              fromMe: key.fromMe,
-              participant: key?.remoteJid,
-              status: item.status.toUpperCase(),
-              instanceId: this.instanceId,
-            };
-
-            this.sendDataWebhook(Events.MESSAGES_UPDATE, message);
-
-            await this.prismaRepository.messageUpdate.create({
-              data: message,
-            });
-
-            if (findMessage.webhookUrl) {
-              await axios.post(findMessage.webhookUrl, message);
-            }
-          }
-        }
-      }
     } catch (error) {
       this.logger.error(error);
+    }
+  }
+
+  protected async messageStatusHandle(received: any) {
+    const statuses = Array.isArray(received.statuses) ? received.statuses : [];
+
+    for (const item of statuses) {
+      const isFailed = typeof item?.status === 'string' && item.status.toUpperCase() === 'FAILED';
+      const recipientNumber =
+        typeof item?.recipient_id === 'string'
+          ? /^(\d+)(?:@s\.whatsapp\.net)?$/.exec(item.recipient_id)?.[1]
+          : undefined;
+
+      if (!item?.id || (!recipientNumber && !isFailed)) {
+        this.logger.warn('ChannelStartupService -> messageStatusHandle -> message ID or recipient not found');
+        continue;
+      }
+
+      // A failed delivery can still be correlated by its message ID without a recipient phone number.
+      const remoteJid = recipientNumber ? `${recipientNumber}@s.whatsapp.net` : null;
+
+      if (item.message === null && item.status === undefined) {
+        await this.sendDataWebhook(Events.MESSAGES_DELETE, { id: item.id, remoteJid, fromMe: true }, true, ['webhook']);
+        continue;
+      }
+
+      if (typeof item.status !== 'string' || !item.status) {
+        this.logger.warn('ChannelStartupService -> messageStatusHandle -> message status not found');
+        continue;
+      }
+
+      const message = {
+        ...item,
+        keyId: item.id,
+        remoteJid,
+        fromMe: true,
+        participant: remoteJid,
+        status: item.status.toUpperCase(),
+        instanceId: this.instanceId,
+      };
+
+      if (isFailed) {
+        this.logger.warn({
+          local: 'BusinessStartupService.messageStatusHandle',
+          message: 'Meta message delivery failed; forwarding status to instance webhook',
+          instanceId: this.instanceId,
+          keyId: item.id,
+          recipientId: item.recipient_id ?? null,
+          remoteJid,
+          errors: item.errors,
+        });
+      }
+
+      await this.sendDataWebhook(Events.MESSAGES_UPDATE, message, true, ['webhook']);
+    }
+  }
+
+  protected async messageEchoHandle(received: any, database: Database, settings: any) {
+    const messageEchoes = Array.isArray(received.message_echoes) ? received.message_echoes : [];
+    const contacts = Array.isArray(received.contacts) ? received.contacts : [];
+
+    for await (const messageEcho of messageEchoes) {
+      // Preserve Meta's WhatsApp ID without phone-number rewriting or treating a LID as a phone number.
+      const remoteNumber =
+        typeof messageEcho?.to === 'string' ? /^(\d+)(?:@s\.whatsapp\.net)?$/.exec(messageEcho.to)?.[1] : undefined;
+
+      if (!remoteNumber) {
+        this.logger.error(
+          'ChannelStartupService -> messageEchoHandle -> message echo recipient phone number not found',
+        );
+        continue;
+      }
+
+      const echoRecipient = `${remoteNumber}@s.whatsapp.net`;
+      this.phoneNumber = echoRecipient;
+
+      const recipientIds = [remoteNumber, echoRecipient];
+      const receivedContact = contacts.find((contact) =>
+        recipientIds.includes(contact?.wa_id || contact?.profile?.phone),
+      );
+      let pushName = receivedContact?.profile?.name?.trim() || '';
+
+      if (!pushName) {
+        try {
+          const savedContact = await this.prismaRepository.contact.findFirst({
+            where: {
+              instanceId: this.instanceId,
+              remoteJid: { in: recipientIds },
+              pushName: { not: '' },
+            },
+            select: { pushName: true },
+          });
+          pushName = savedContact?.pushName?.trim() || '';
+        } catch {
+          this.logger.warn('ChannelStartupService -> messageEchoHandle -> could not load recipient name');
+        }
+      }
+
+      const echoReceived = {
+        ...received,
+        contacts: [
+          {
+            ...receivedContact,
+            profile: {
+              ...receivedContact?.profile,
+              phone: remoteNumber,
+              name: pushName,
+            },
+            wa_id: remoteNumber,
+          },
+        ],
+        messages: [messageEcho],
+      };
+
+      await this.messageHandle(echoReceived, database, settings, echoRecipient);
     }
   }
 
@@ -899,6 +969,14 @@ export class BusinessStartupService extends ChannelStartupService {
       this.logger.log('Contenido recibido en eventHandler:');
       this.logger.log(JSON.stringify(content, null, 2));
 
+      if (Array.isArray(content.statuses) && content.statuses.length > 0) {
+        await this.messageStatusHandle(content);
+
+        if (!content.messages?.length && !content.message_echoes?.length) {
+          return;
+        }
+      }
+
       const database = this.configService.get<Database>('DATABASE');
       const settings = await this.findSettings();
 
@@ -926,11 +1004,13 @@ export class BusinessStartupService extends ChannelStartupService {
         } else {
           this.logger.warn(`Tipo de mensaje no reconocido: ${message.type}`);
         }
-      } else if (content.statuses) {
-        // Procesar actualizaciones de estado
-        this.messageHandle(content, database, settings);
+      } else if (content.message_echoes && content.message_echoes.length > 0) {
+        const messageEcho = content.message_echoes[0];
+        this.logger.log(`Tipo de message echo recebido: ${messageEcho.type}`);
+
+        await this.messageEchoHandle(content, database, settings);
       } else {
-        this.logger.warn('No se encontraron mensajes ni estados en el contenido recibido');
+        this.logger.warn('No se encontraron mensajes, ecos de mensajes ni estados en el contenido recibido');
       }
     } catch (error) {
       this.logger.error('Error en eventHandler:');
@@ -1016,7 +1096,8 @@ export class BusinessStartupService extends ChannelStartupService {
           return await this.post(content, 'messages');
         }
         if (message['media']) {
-          const isImage = message['mimetype']?.startsWith('image/');
+          const mimeType = this.normalizeMimeType(message['mimetype']);
+          const isImage = mimeType.startsWith('image/');
 
           content = {
             messaging_product: 'whatsapp',
@@ -1025,14 +1106,25 @@ export class BusinessStartupService extends ChannelStartupService {
             to: number.replace(/\D/g, ''),
             [message['mediaType']]: {
               [message['type']]: message['id'],
+
               ...(message['mediaType'] !== 'audio' &&
                 message['mediaType'] !== 'video' &&
                 message['fileName'] &&
-                !isImage && { filename: message['fileName'] }),
-              ...(message['mediaType'] !== 'audio' && message['caption'] && { caption: message['caption'] }),
+                !isImage && {
+                  filename: message['fileName'],
+                }),
+
+              ...(message['mediaType'] !== 'audio' &&
+                message['caption'] && {
+                  caption: message['caption'],
+                }),
             },
           };
-          quoted ? (content.context = { message_id: quoted.id }) : content;
+
+          if (quoted) {
+            content.context = { message_id: quoted.id };
+          }
+
           return await this.post(content, 'messages');
         }
         if (message['audio']) {
@@ -1172,6 +1264,35 @@ export class BusinessStartupService extends ChannelStartupService {
       this.logger.error(error);
       throw new BadRequestException(error.toString());
     }
+  }
+
+  private normalizeMimeType(value: unknown): string {
+    if (typeof value === 'string') {
+      return value;
+    }
+
+    if (Array.isArray(value)) {
+      const mimeType = value.find((item) => typeof item === 'string');
+      return typeof mimeType === 'string' ? mimeType : '';
+    }
+
+    if (value && typeof value === 'object') {
+      const mimeTypeObject = value as Record<string, unknown>;
+
+      const candidates = [
+        mimeTypeObject.mimetype,
+        mimeTypeObject.mimeType,
+        mimeTypeObject.contentType,
+        mimeTypeObject.content_type,
+        mimeTypeObject.type,
+      ];
+
+      const mimeType = candidates.find((item) => typeof item === 'string');
+
+      return typeof mimeType === 'string' ? mimeType : '';
+    }
+
+    return '';
   }
 
   // Send Message Controller

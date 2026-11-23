@@ -15,54 +15,118 @@ export class MetaController extends ChannelController implements ChannelControll
   integrationEnabled: boolean;
 
   public async receiveWebhook(data: any) {
-    if (data.object === 'whatsapp_business_account') {
-      if (data.entry[0]?.changes[0]?.field === 'message_template_status_update') {
-        const template = await this.prismaRepository.template.findFirst({
-          where: { templateId: `${data.entry[0].changes[0].value.message_template_id}` },
-        });
+    if (data.object !== 'whatsapp_business_account') {
+      return {
+        status: 'success',
+      };
+    }
 
-        if (!template) {
-          console.log('template not found');
-          return;
+    const entries = data.entry ?? [];
+
+    for (const entry of entries) {
+      const changes = entry.changes ?? [];
+
+      for (const change of changes) {
+        if (change?.field === 'message_template_status_update') {
+          const templateId = change?.value?.message_template_id;
+
+          if (!templateId) {
+            this.logger.error('WebhookService -> receiveWebhookMeta -> templateId not found');
+            continue;
+          }
+
+          const template = await this.prismaRepository.template.findFirst({
+            where: {
+              templateId: String(templateId),
+            },
+          });
+
+          if (!template) {
+            this.logger.error(`WebhookService -> receiveWebhookMeta -> template not found: ${templateId}`);
+            continue;
+          }
+
+          if (!template.webhookUrl) {
+            this.logger.error(`WebhookService -> receiveWebhookMeta -> template webhookUrl not found: ${templateId}`);
+            continue;
+          }
+
+          try {
+            await axios.post(template.webhookUrl, change.value, {
+              headers: {
+                'Content-Type': 'application/json',
+              },
+            });
+          } catch (error) {
+            this.logger.error(
+              `WebhookService -> receiveWebhookMeta -> error sending template webhook: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+
+          continue;
         }
 
-        const { webhookUrl } = template;
-
-        await axios.post(webhookUrl, data.entry[0].changes[0].value, {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-        return;
-      }
-
-      data.entry?.forEach(async (entry: any) => {
-        const numberId = entry.changes[0].value.metadata.phone_number_id;
+        const numberId = change?.value?.metadata?.phone_number_id;
 
         if (!numberId) {
           this.logger.error('WebhookService -> receiveWebhookMeta -> numberId not found');
-          return {
-            status: 'success',
-          };
+          continue;
         }
 
-        const instance = await this.prismaRepository.instance.findFirst({
-          where: { number: numberId },
+        const instances = await this.prismaRepository.instance.findMany({
+          where: {
+            number: String(numberId),
+          },
         });
 
-        if (!instance) {
-          this.logger.error('WebhookService -> receiveWebhookMeta -> instance not found');
-          return {
-            status: 'success',
-          };
+        if (!instances.length) {
+          this.logger.error(`WebhookService -> receiveWebhookMeta -> instances not found for numberId: ${numberId}`);
+          continue;
         }
 
-        await this.waMonitor.waInstances[instance.name].connectToWhatsapp(data);
-
-        return {
-          status: 'success',
+        const webhookData = {
+          ...data,
+          entry: [
+            {
+              ...entry,
+              changes: [change],
+            },
+          ],
         };
-      });
+
+        const results = await Promise.allSettled(
+          instances.map(async (instance) => {
+            const waInstance = this.waMonitor.waInstances[instance.name];
+
+            if (!waInstance) {
+              throw new Error(`Instance not loaded: ${instance.name}`);
+            }
+
+            await waInstance.connectToWhatsapp(webhookData);
+
+            return instance.name;
+          }),
+        );
+
+        results.forEach((result, index) => {
+          const instanceName = instances[index].name;
+
+          if (result.status === 'rejected') {
+            this.logger.error(
+              `WebhookService -> receiveWebhookMeta -> error processing webhook for instance ${instanceName}: ${
+                result.reason instanceof Error ? result.reason.message : String(result.reason)
+              }`,
+            );
+            return;
+          }
+
+          this.logger.log(
+            `WebhookService -> receiveWebhookMeta -> webhook processed successfully for instance ${instanceName}`,
+          );
+        });
+      }
     }
 
     return {

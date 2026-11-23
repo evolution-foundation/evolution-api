@@ -18,6 +18,7 @@ enum Color {
   DEBUG = '\x1b[36m',
   VERBOSE = '\x1b[37m',
   DARK = '\x1b[30m',
+  WEBHOOKMETA = '\x1b[35m',
 }
 
 enum Command {
@@ -34,6 +35,7 @@ enum Level {
   ERROR = Color.ERROR + '%s' + Command.RESET,
   DEBUG = Color.DEBUG + '%s' + Command.RESET,
   VERBOSE = Color.VERBOSE + '%s' + Command.RESET,
+  WEBHOOKMETA = Color.WEBHOOKMETA + '%s' + Command.RESET,
 }
 
 enum Type {
@@ -44,6 +46,7 @@ enum Type {
   ERROR = 'ERROR',
   DEBUG = 'DEBUG',
   VERBOSE = 'VERBOSE',
+  WEBHOOKMETA = 'WEBHOOKMETA',
 }
 
 enum Background {
@@ -54,6 +57,7 @@ enum Background {
   ERROR = '\x1b[41m',
   DEBUG = '\x1b[46m',
   VERBOSE = '\x1b[47m',
+  WEBHOOKMETA = '\x1b[45m',
 }
 
 export class Logger {
@@ -150,5 +154,9 @@ export class Logger {
 
   public dark(value: any) {
     this.console(value, Type.DARK);
+  }
+
+  public webhookMeta(value: any) {
+    this.console(value, Type.WEBHOOKMETA);
   }
 }
