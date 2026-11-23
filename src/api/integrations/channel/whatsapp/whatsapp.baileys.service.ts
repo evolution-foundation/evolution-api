@@ -279,6 +279,21 @@ export class BaileysStartupService extends ChannelStartupService {
   // After WhatsApp emits 515 it usually closes with `loggedOut`; that close is *not* a real logout
   // and we should reconnect. We treat any close arriving within this grace window as 515-driven.
   private static readonly STREAM_515_RECONNECT_GRACE_MS = 30_000;
+
+  // Exponential backoff for transient disconnects (e.g. 408 connectionLost/timedOut).
+  // The last value repeats once the ladder is exhausted.
+  private static readonly RECONNECT_BACKOFF_MS = [3_000, 6_000, 12_000, 30_000, 60_000, 120_000, 300_000];
+
+  private static readonly RECONNECT_MAX_ATTEMPTS = 20;
+
+  private _reconnectAttempts = 0;
+
+  // True only while a backoff-scheduled reconnect is being dispatched, so that connectToWhatsapp can
+  // tell an automatic retry from an external connect request (/instance/connect, boot, watchdog).
+  private _reconnectScheduled = false;
+
+  // Handle of the pending backoff retry, so logout/deletion can cancel it.
+  private _reconnectTimer: NodeJS.Timeout | null = null;
   // The numeric WhatsApp stream-error code that triggers the grace-period reconnect above.
   private static readonly STREAM_ERROR_CODE_RECONNECT = '515';
 
@@ -294,6 +309,14 @@ export class BaileysStartupService extends ChannelStartupService {
     // Mark instance as deleting to prevent reconnection attempts.
     this.isDeleting = true;
     this.endSession = true;
+
+    // Drop any retry still waiting on the backoff ladder, so it neither fires nor holds a timer.
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
+    this._reconnectScheduled = false;
+    this._reconnectAttempts = 0;
 
     this.messageProcessor.onDestroy();
 
@@ -500,9 +523,15 @@ export class BaileysStartupService extends ChannelStartupService {
       }
 
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      // 408 = request timeout — added per #2501 to avoid reconnect loops on
-      // transient network drops where the server returned a 408 in the close.
-      const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406, 408];
+      // Terminal codes: the credentials themselves are no longer valid, so re-pairing (QR) is
+      // genuinely required and dropping the session is the correct outcome.
+      //
+      // 408 used to be listed here (per #2501, to avoid reconnect loops on transient drops), but in
+      // Baileys 408 is connectionLost/timedOut — i.e. how the keep-alive reports a socket that stopped
+      // answering. Treating it as terminal made every transient drop emit 'logout.instance', which
+      // wipes the persisted session and forces a QR re-scan. It is now retried with the exponential
+      // backoff below; the loop #2501 worried about is bounded by RECONNECT_MAX_ATTEMPTS instead.
+      const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406];
 
       // FIX: Do not reconnect if it's the initial connection (waiting for QR code)
       // This prevents infinite loop that blocks QR code generation
@@ -517,24 +546,48 @@ export class BaileysStartupService extends ChannelStartupService {
       // a follow-up loggedOut is the expected restart signal — not an actual
       // logout — so reconnect anyway.
       const recentStream515 = Date.now() - this._lastStream515At < BaileysStartupService.STREAM_515_RECONNECT_GRACE_MS;
-      const shouldReconnect =
-        !codesToNotReconnect.includes(statusCode) || (statusCode === DisconnectReason.loggedOut && recentStream515);
+      const isTerminal =
+        codesToNotReconnect.includes(statusCode) && !(statusCode === DisconnectReason.loggedOut && recentStream515);
+      const attemptsExhausted = this._reconnectAttempts >= BaileysStartupService.RECONNECT_MAX_ATTEMPTS;
+      const shouldReconnect = !isTerminal && !attemptsExhausted;
 
       this.logger.info({
         message: 'Connection closed, evaluating reconnection',
         statusCode,
         shouldReconnect,
+        isTerminal,
+        reconnectAttempts: this._reconnectAttempts,
         instanceName: this.instance.name,
       });
 
       if (shouldReconnect) {
-        // Add 3 second delay before reconnection to prevent rapid reconnection loops
-        this.logger.info('Reconnecting in 3 seconds...');
-        setTimeout(async () => {
+        const ladder = BaileysStartupService.RECONNECT_BACKOFF_MS;
+        const delay = ladder[Math.min(this._reconnectAttempts, ladder.length - 1)];
+        this._reconnectAttempts += 1;
+
+        this.logger.info(
+          `Reconnecting in ${delay / 1000}s (attempt ${this._reconnectAttempts}/${BaileysStartupService.RECONNECT_MAX_ATTEMPTS}, status code ${statusCode})`,
+        );
+        this._reconnectTimer = setTimeout(async () => {
+          this._reconnectTimer = null;
+
+          // The ladder can wait up to five minutes, and the instance may have been logged out or
+          // deleted in the meantime. Reconnecting here would rebuild a socket for an instance the
+          // user deliberately shut down, after its credentials were already removed.
+          if (this.isDeleting || this.endSession) {
+            this.logger.info('Reconnect cancelled: instance was logged out or deleted while waiting');
+            return;
+          }
+
+          this._reconnectScheduled = true;
           await this.connectToWhatsapp(this.phoneNumber);
-        }, 3000);
+        }, delay);
       } else {
-        this.logger.info(`Skipping reconnection for status code ${statusCode} (code is in codesToNotReconnect list)`);
+        this.logger.info(
+          isTerminal
+            ? `Skipping reconnection for status code ${statusCode} (code is in codesToNotReconnect list)`
+            : `Reconnect attempts exhausted for status code ${statusCode} after ${this._reconnectAttempts} attempts`,
+        );
         this.sendDataWebhook(Events.STATUS_INSTANCE, {
           instance: this.instance.name,
           status: 'closed',
@@ -561,9 +614,20 @@ export class BaileysStartupService extends ChannelStartupService {
           );
         }
 
-        this.eventEmitter.emit('logout.instance', this.instance.name, 'inner');
+        if (isTerminal) {
+          // 'logout.instance' runs cleaningUp(), which deletes the persisted credentials (session rows
+          // and instance dir). That is correct here: the credentials are no longer usable.
+          this.eventEmitter.emit('logout.instance', this.instance.name, 'inner');
+        } else {
+          // Transient failure that outlived the backoff ladder. Leave the credentials untouched so the
+          // instance can be brought back with /instance/connect — no QR re-scan needed.
+          this.logger.warn(
+            `Instance "${this.instance.name}" left disconnected with session preserved; reconnect with /instance/connect`,
+          );
+        }
+
         this.client?.ws?.close();
-        this.client.end(new Error('Close connection'));
+        this.client?.end(new Error('Close connection'));
 
         this.sendDataWebhook(Events.CONNECTION_UPDATE, { instance: this.instance.name, ...this.stateConnection });
       }
@@ -574,6 +638,9 @@ export class BaileysStartupService extends ChannelStartupService {
         this.logger.warn('connectionUpdate: connection open but client.user is undefined, skipping');
         return;
       }
+
+      // Connection is healthy again — restart the backoff ladder for the next drop.
+      this._reconnectAttempts = 0;
       this.instance.wuid = this.client.user.id.replace(/:\d+/, '');
       try {
         const profilePic = await this.profilePicture(this.instance.wuid);
@@ -838,6 +905,14 @@ export class BaileysStartupService extends ChannelStartupService {
 
   public async connectToWhatsapp(number?: string): Promise<WASocket> {
     try {
+      // An external connect request (/instance/connect, boot auto-connect, watchdog) restarts the
+      // backoff ladder; a retry dispatched by the ladder itself must not.
+      if (this._reconnectScheduled) {
+        this._reconnectScheduled = false;
+      } else {
+        this._reconnectAttempts = 0;
+      }
+
       this.loadChatwoot();
       this.loadSettings();
       this.loadWebhook();
