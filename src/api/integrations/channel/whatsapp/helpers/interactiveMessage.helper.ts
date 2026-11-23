@@ -16,6 +16,36 @@ export function buildInteractiveBizNode(): BinaryNode {
 }
 
 /**
+ * Stanza nodes for the PIX button (`payment_info`).
+ *
+ * The generic `mixed` node above is enough for WhatsApp Web, but Android/iOS
+ * only render the payment card when the native_flow is named `payment_info`
+ * and, in 1:1 chats, when the stanza also carries `<bot biz_bot="1"/>`.
+ * Without them the message is delivered but nothing shows up on the phone.
+ */
+export function buildPixBizNodes(jid: string): BinaryNode[] {
+  const nodes: BinaryNode[] = [
+    {
+      tag: 'biz',
+      attrs: {},
+      content: [
+        {
+          tag: 'interactive',
+          attrs: { type: 'native_flow', v: '1' },
+          content: [{ tag: 'native_flow', attrs: { name: 'payment_info' } }],
+        },
+      ],
+    },
+  ];
+
+  if (!/@(g\.us|newsletter|broadcast)$/.test(jid)) {
+    nodes.push({ tag: 'bot', attrs: { biz_bot: '1' } });
+  }
+
+  return nodes;
+}
+
+/**
  * Biz node específico para `listMessage` legado.
  * Necessário para o WhatsApp Web/Desktop renderizar a lista — o moderno
  * (`interactiveMessage` + `single_select`) não é renderizado no Web.

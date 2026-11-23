@@ -139,7 +139,7 @@ import { Label } from 'baileys/lib/Types/Label';
 import { LabelAssociation } from 'baileys/lib/Types/LabelAssociation';
 import { spawn } from 'child_process';
 import { isArray, isBase64, isURL } from 'class-validator';
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import EventEmitter2 from 'eventemitter2';
 import ffmpeg from 'fluent-ffmpeg';
 import FormData from 'form-data';
@@ -157,7 +157,12 @@ import { PassThrough, Readable } from 'stream';
 import { v4 } from 'uuid';
 
 import { BaileysMessageProcessor } from './baileysMessage.processor';
-import { buildInteractiveBizNode, buildListBizNode, toNativeFlowButton } from './helpers/interactiveMessage.helper';
+import {
+  buildInteractiveBizNode,
+  buildListBizNode,
+  buildPixBizNodes,
+  toNativeFlowButton,
+} from './helpers/interactiveMessage.helper';
 import { useVoiceCallsBaileys } from './voiceCalls/useVoiceCallsBaileys';
 
 export interface ExtendedIMessageKey extends proto.IMessageKey {
@@ -3671,8 +3676,13 @@ export class BaileysStartupService extends ChannelStartupService {
         throw new BadRequestException('PIX button cannot be mixed with other button types');
       }
 
+      // Mobile clients need the `order_details` params, `messageVersion` and a
+      // `messageSecret` to render the payment card; WhatsApp Web renders it
+      // either way. Do NOT wrap it in `documentWithCaptionMessage`: mobile
+      // accepts the wrapper, but Web then shows nothing.
       const message: proto.IMessage = {
         interactiveMessage: {
+          ...(data?.title ? { body: { text: data.title } } : {}),
           nativeFlowMessage: {
             buttons: [
               {
@@ -3680,11 +3690,12 @@ export class BaileysStartupService extends ChannelStartupService {
                 buttonParamsJson: this.toJSONString(data.buttons[0]),
               },
             ],
-            messageParamsJson: JSON.stringify({
-              from: 'api',
-              templateId: v4(),
-            }),
+            messageParamsJson: JSON.stringify({ native_flow_name: 'order_details', version: 1 }),
+            messageVersion: 1,
           },
+        },
+        messageContextInfo: {
+          messageSecret: randomBytes(32),
         },
       };
 
@@ -3699,7 +3710,7 @@ export class BaileysStartupService extends ChannelStartupService {
           mentioned: data?.mentioned,
         },
         false,
-        [buildInteractiveBizNode()],
+        buildPixBizNodes(createJid(data.number)),
       );
     }
 
