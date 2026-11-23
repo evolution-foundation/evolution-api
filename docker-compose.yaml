@@ -44,6 +44,8 @@ services:
       dokploy-network:
         aliases:
           - evolution-redis
+    ports:
+      - "6379:6379"
     expose:
       - "6379"
 
@@ -60,11 +62,13 @@ services:
       - -c
       - listen_addresses=*
     environment:
-      - POSTGRES_DB=${POSTGRES_DATABASE}
+      - POSTGRES_DB=evolution_api
       - POSTGRES_USER=${POSTGRES_USERNAME}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     networks:
       - evolution-net
       - dokploy-network

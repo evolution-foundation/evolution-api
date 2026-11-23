@@ -8,19 +8,35 @@ import { redisClient } from './rediscache.client';
 
 export class RedisCache implements ICache {
   private readonly logger = new Logger('RedisCache');
-  private client: RedisClientType;
   private conf: CacheConfRedis;
+  private client: RedisClientType = null;
+  private connecting: Promise<RedisClientType> | null = null;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly module: string,
   ) {
     this.conf = this.configService.get<CacheConf>('CACHE')?.REDIS;
-    this.client = redisClient.getConnection();
   }
+
+  private async ensureClient(): Promise<RedisClientType> {
+    if (this.client) {
+      return this.client;
+    }
+    if (this.connecting) {
+      return this.connecting;
+    }
+    this.connecting = redisClient.getConnection();
+    this.client = await this.connecting;
+    this.connecting = null;
+    return this.client;
+  }
+
   async get(key: string): Promise<any> {
     try {
-      return JSON.parse(await this.client.get(this.buildKey(key)));
+      const client = await this.ensureClient();
+      if (!client) return null;
+      return JSON.parse(await client.get(this.buildKey(key)));
     } catch (error) {
       this.logger.error(error);
     }
@@ -28,7 +44,9 @@ export class RedisCache implements ICache {
 
   async hGet(key: string, field: string) {
     try {
-      const data = await this.client.hGet(this.buildKey(key), field);
+      const client = await this.ensureClient();
+      if (!client) return null;
+      const data = await client.hGet(this.buildKey(key), field);
 
       if (data) {
         return JSON.parse(data, BufferJSON.reviver);
@@ -42,7 +60,9 @@ export class RedisCache implements ICache {
 
   async set(key: string, value: any, ttl?: number) {
     try {
-      await this.client.setEx(this.buildKey(key), ttl || this.conf?.TTL, JSON.stringify(value));
+      const client = await this.ensureClient();
+      if (!client) return;
+      await client.setEx(this.buildKey(key), ttl || this.conf?.TTL, JSON.stringify(value));
     } catch (error) {
       this.logger.error(error);
     }
@@ -50,9 +70,11 @@ export class RedisCache implements ICache {
 
   async hSet(key: string, field: string, value: any) {
     try {
+      const client = await this.ensureClient();
+      if (!client) return;
       const json = JSON.stringify(value, BufferJSON.replacer);
 
-      await this.client.hSet(this.buildKey(key), field, json);
+      await client.hSet(this.buildKey(key), field, json);
     } catch (error) {
       this.logger.error(error);
     }
@@ -60,7 +82,9 @@ export class RedisCache implements ICache {
 
   async has(key: string) {
     try {
-      return (await this.client.exists(this.buildKey(key))) > 0;
+      const client = await this.ensureClient();
+      if (!client) return false;
+      return (await client.exists(this.buildKey(key))) > 0;
     } catch (error) {
       this.logger.error(error);
     }
@@ -68,7 +92,9 @@ export class RedisCache implements ICache {
 
   async delete(key: string) {
     try {
-      return await this.client.del(this.buildKey(key));
+      const client = await this.ensureClient();
+      if (!client) return 0;
+      return await client.del(this.buildKey(key));
     } catch (error) {
       this.logger.error(error);
     }
@@ -76,7 +102,9 @@ export class RedisCache implements ICache {
 
   async hDelete(key: string, field: string) {
     try {
-      return await this.client.hDel(this.buildKey(key), field);
+      const client = await this.ensureClient();
+      if (!client) return false;
+      return await client.hDel(this.buildKey(key), field);
     } catch (error) {
       this.logger.error(error);
     }
@@ -84,12 +112,14 @@ export class RedisCache implements ICache {
 
   async deleteAll(appendCriteria?: string) {
     try {
+      const client = await this.ensureClient();
+      if (!client) return 0;
       const keys = await this.keys(appendCriteria);
       if (!keys?.length) {
         return 0;
       }
 
-      return await this.client.del(keys);
+      return await client.del(keys);
     } catch (error) {
       this.logger.error(error);
     }
@@ -97,9 +127,11 @@ export class RedisCache implements ICache {
 
   async keys(appendCriteria?: string) {
     try {
+      const client = await this.ensureClient();
+      if (!client) return [];
       const match = `${this.buildKey('')}${appendCriteria ? `${appendCriteria}:` : ''}*`;
       const keys = [];
-      for await (const key of this.client.scanIterator({
+      for await (const key of client.scanIterator({
         MATCH: match,
         COUNT: 100,
       })) {
