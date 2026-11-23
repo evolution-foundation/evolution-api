@@ -13,7 +13,7 @@ import { Auth, Chatwoot, ConfigService, Database, HttpServer, Proxy } from '@con
 import { Logger } from '@config/logger.config';
 import { NotFoundException } from '@exceptions';
 import { Contact, Message, Prisma } from '@prisma/client';
-import { createJid } from '@utils/createJid';
+import { createJid, formatBRNumber } from '@utils/createJid';
 import { WASocket } from 'baileys';
 import { isArray } from 'class-validator';
 import EventEmitter2 from 'eventemitter2';
@@ -478,23 +478,8 @@ export class ChannelStartupService {
     return jid;
   }
 
-  // Check if the number is br
-  public formatBRNumber(jid: string) {
-    const regexp = new RegExp(/^(\d{2})(\d{2})\d{1}(\d{8})$/);
-    if (regexp.test(jid)) {
-      const match = regexp.exec(jid);
-      if (match && match[1] === '55') {
-        const joker = Number.parseInt(match[3][0]);
-        const ddd = Number.parseInt(match[2]);
-        if (joker < 7 || ddd < 31) {
-          return match[0];
-        }
-        return match[1] + match[2] + match[3];
-      }
-      return jid;
-    } else {
-      return jid;
-    }
+  public formatBRNumber(jid: string): string {
+    return formatBRNumber(jid);
   }
 
   public async fetchContacts(query: Query<Contact>) {

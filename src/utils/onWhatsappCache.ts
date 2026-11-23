@@ -22,12 +22,24 @@ function getAvailableNumbers(remoteJid: string) {
 
   // Brazilian numbers
   if (remoteJid.startsWith('55')) {
-    const numberWithDigit =
-      number.slice(4, 5) === '9' && number.length === 13 ? number : `${number.slice(0, 4)}9${number.slice(4)}`;
-    const numberWithoutDigit = number.length === 12 ? number : number.slice(0, 4) + number.slice(5);
+    let numberWithDigit = number;
+    let numberWithoutDigit = number;
+
+    if (number.length === 13 && number.slice(4, 5) === '9') {
+      numberWithDigit = number;
+      numberWithoutDigit = `${number.slice(0, 4)}${number.slice(5)}`;
+    } else if (number.length === 12) {
+      const firstDigit = Number.parseInt(number.slice(4, 5));
+      if (firstDigit >= 6) {
+        numberWithDigit = `${number.slice(0, 4)}9${number.slice(4)}`;
+        numberWithoutDigit = number;
+      }
+    }
 
     numbersAvailable.push(numberWithDigit);
-    numbersAvailable.push(numberWithoutDigit);
+    if (numberWithoutDigit !== numberWithDigit) {
+      numbersAvailable.push(numberWithoutDigit);
+    }
   }
 
   // Mexican/Argentina numbers
@@ -48,7 +60,9 @@ function getAvailableNumbers(remoteJid: string) {
     const numberWithoutDigit = number.length === 12 ? number : number.slice(0, 2) + number.slice(3);
 
     numbersAvailable.push(numberWithDigit);
-    numbersAvailable.push(numberWithoutDigit);
+    if (numberWithoutDigit !== numberWithDigit) {
+      numbersAvailable.push(numberWithoutDigit);
+    }
   }
 
   // Other countries
@@ -129,8 +143,23 @@ export async function saveOnWhatsappCache(data: ISaveOnWhatsappCacheParams[]) {
       const newJidOptionsString = sortedJidOptions.join(',');
       const newLid = item.lid === 'lid' || item.remoteJid?.includes('@lid') ? 'lid' : null;
 
+      let targetRemoteJid = remoteJid;
+      if (existingRecord?.remoteJid) {
+        const existingNum = existingRecord.remoteJid.split('@')[0];
+        const newNum = remoteJid.split('@')[0];
+        if (
+          existingNum.startsWith('55') &&
+          existingNum.length === 13 &&
+          existingNum[4] === '9' &&
+          newNum.startsWith('55') &&
+          newNum.length === 12
+        ) {
+          targetRemoteJid = existingRecord.remoteJid;
+        }
+      }
+
       const dataPayload = {
-        remoteJid: remoteJid,
+        remoteJid: targetRemoteJid,
         jidOptions: newJidOptionsString,
         lid: newLid,
       };

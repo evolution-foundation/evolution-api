@@ -13,23 +13,36 @@ function formatMXOrARNumber(jid: string): string {
   return jid;
 }
 
-// Check if the number is br
-function formatBRNumber(jid: string) {
-  const regexp = new RegExp(/^(\d{2})(\d{2})\d{1}(\d{8})$/);
-  if (regexp.test(jid)) {
-    const match = regexp.exec(jid);
-    if (match && match[1] === '55') {
-      const joker = Number.parseInt(match[3][0]);
-      const ddd = Number.parseInt(match[2]);
-      if (joker < 7 || ddd < 31) {
-        return match[0];
-      }
-      return match[1] + match[2] + match[3];
-    }
-    return jid;
-  } else {
+const BRAZIL_COUNTRY_CODE = '55';
+const BRAZIL_PHONE_WITH_NINTH_DIGIT_LENGTH = 13;
+const BRAZIL_PHONE_WITHOUT_NINTH_DIGIT_LENGTH = 12;
+const BRAZIL_MOBILE_NINTH_DIGIT = '9';
+const COUNTRY_AND_AREA_CODE_LENGTH = 4;
+const FIRST_SUBSCRIBER_DIGIT_INDEX = 4;
+const MINIMUM_MOBILE_FIRST_DIGIT = 6;
+
+export function formatBRNumber(jid: string): string {
+  if (!jid.startsWith(BRAZIL_COUNTRY_CODE)) {
     return jid;
   }
+
+  if (jid.length === BRAZIL_PHONE_WITH_NINTH_DIGIT_LENGTH) {
+    return jid;
+  }
+
+  if (jid.length === BRAZIL_PHONE_WITHOUT_NINTH_DIGIT_LENGTH) {
+    const firstSubscriberDigit = Number.parseInt(jid[FIRST_SUBSCRIBER_DIGIT_INDEX]);
+    const isMobileMissingNinthDigit = firstSubscriberDigit >= MINIMUM_MOBILE_FIRST_DIGIT;
+
+    if (isMobileMissingNinthDigit) {
+      const countryAndAreaCode = jid.slice(0, COUNTRY_AND_AREA_CODE_LENGTH);
+      const subscriberNumber = jid.slice(COUNTRY_AND_AREA_CODE_LENGTH);
+
+      return `${countryAndAreaCode}${BRAZIL_MOBILE_NINTH_DIGIT}${subscriberNumber}`;
+    }
+  }
+
+  return jid;
 }
 
 export function createJid(number: string): string {

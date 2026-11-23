@@ -4114,7 +4114,18 @@ export class BaileysStartupService extends ChannelStartupService {
           numberVerified = verify.find((v) => v.jid === user.jid);
         }
 
-        const numberJid = numberVerified?.jid || user.jid;
+        let numberJid = numberVerified?.jid || user.jid;
+        if (
+          user.number.startsWith('55') &&
+          user.number.length === 13 &&
+          user.number[4] === '9' &&
+          numberJid.includes('@s.whatsapp.net')
+        ) {
+          const jidNum = numberJid.split('@')[0];
+          if (jidNum.length === 12) {
+            numberJid = `${user.number}@s.whatsapp.net`;
+          }
+        }
 
         return new OnWhatsAppDto(
           numberJid,
