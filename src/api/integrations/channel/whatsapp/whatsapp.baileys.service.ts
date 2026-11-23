@@ -104,6 +104,7 @@ import makeWASocket, {
   DisconnectReason,
   downloadContentFromMessage,
   downloadMediaMessage,
+  generateMessageIDV2,
   generateWAMessageFromContent,
   getAggregateVotesInPollMessage,
   GetCatalogOptions,
@@ -3337,28 +3338,15 @@ export class BaileysStartupService extends ChannelStartupService {
       if (hasOtherButtons) {
         throw new BadRequestException('PIX button cannot be mixed with other button types');
       }
-
-      const message: proto.IMessage = {
-        viewOnceMessage: {
-          message: {
-            interactiveMessage: {
-              nativeFlowMessage: {
-                buttons: [{ name: this.mapType.get('pix'), buttonParamsJson: this.toJSONString(data.buttons[0]) }],
-                messageParamsJson: JSON.stringify({ from: 'api', templateId: v4() }),
-              },
-            },
-          },
-        },
-      };
-
-      return await this.sendMessageWithTyping(data.number, message, {
-        delay: data?.delay,
-        presence: 'composing',
-        quoted: data?.quoted,
-        mentionsEveryOne: data?.mentionsEveryOne,
-        mentioned: data?.mentioned,
-      });
     }
+
+    const isWA = (await this.whatsappNumber({ numbers: [data.number] }))?.shift();
+    if (!isWA.exists && !isJidGroup(isWA.jid) && !isWA.jid.includes('@broadcast')) {
+      throw new BadRequestException(isWA);
+    }
+
+    const sender = isWA.jid.toLowerCase();
+    const isGroup = isJidGroup(sender);
 
     const generate = await (async () => {
       if (data?.thumbnailUrl) {
@@ -3370,46 +3358,114 @@ export class BaileysStartupService extends ChannelStartupService {
       return { name: this.mapType.get(value.type), buttonParamsJson: this.toJSONString(value) };
     });
 
-    const message: proto.IMessage = {
-      viewOnceMessage: {
-        message: {
-          interactiveMessage: {
-            body: {
-              text: (() => {
-                let t = '*' + data.title + '*';
-                if (data?.description) {
-                  t += '\n\n';
-                  t += data.description;
-                  t += '\n';
-                }
-                return t;
-              })(),
-            },
-            footer: { text: data?.footer },
-            header: (() => {
-              if (generate?.message?.imageMessage) {
-                return {
-                  hasMediaAttachment: !!generate.message.imageMessage,
-                  imageMessage: generate.message.imageMessage,
-                };
-              }
-            })(),
-            nativeFlowMessage: {
-              buttons: buttons,
-              messageParamsJson: JSON.stringify({ from: 'api', templateId: v4() }),
-            },
-          },
-        },
+    const interactiveMessage: proto.Message.IInteractiveMessage = {
+      body: {
+        text: (() => {
+          let t = '*' + data.title + '*';
+          if (data?.description) {
+            t += '\n\n';
+            t += data.description;
+            t += '\n';
+          }
+          return t;
+        })(),
+      },
+      footer: { text: data?.footer },
+      header: (() => {
+        if (generate?.message?.imageMessage) {
+          return {
+            hasMediaAttachment: !!generate.message.imageMessage,
+            imageMessage: generate.message.imageMessage,
+          };
+        }
+      })(),
+      nativeFlowMessage: {
+        buttons: buttons,
+        messageParamsJson: JSON.stringify({ from: 'api', templateId: v4() }),
       },
     };
 
-    return await this.sendMessageWithTyping(data.number, message, {
-      delay: data?.delay,
-      presence: 'composing',
-      quoted: data?.quoted,
-      mentionsEveryOne: data?.mentionsEveryOne,
-      mentioned: data?.mentioned,
-    });
+    const message: proto.IMessage = {
+      interactiveMessage: interactiveMessage,
+    };
+
+    try {
+      if (data?.delay) {
+        this.logger.verbose(`Typing for ${data.delay}ms to ${sender}`);
+        await this.client.presenceSubscribe(sender);
+        await this.client.sendPresenceUpdate('composing', sender);
+        await delay(data.delay);
+        await this.client.sendPresenceUpdate('paused', sender);
+      }
+
+      let quoted: WAMessage;
+      if (data?.quoted) {
+        const m = data?.quoted;
+        const msg = m?.message ? m : ((await this.getMessage(m.key, true)) as WAMessage);
+        if (msg) {
+          quoted = msg;
+        }
+      }
+
+      const messageId = generateMessageIDV2();
+      const m = generateWAMessageFromContent(sender, message, {
+        timestamp: new Date(),
+        userJid: this.instance.wuid,
+        messageId,
+        quoted,
+      });
+
+      const additionalNodes: any[] = [
+        {
+          tag: 'biz',
+          attrs: {},
+          content: [
+            {
+              tag: 'interactive',
+              attrs: { type: 'native_flow', v: '1' },
+              content: [
+                {
+                  tag: 'native_flow',
+                  attrs: { v: '2', name: 'mixed' },
+                  content: undefined,
+                },
+              ],
+            },
+          ],
+        },
+      ];
+
+      if (!isGroup) {
+        additionalNodes[0].content.push({
+          tag: 'bot',
+          attrs: { biz_bot: '1' },
+          content: undefined,
+        });
+      }
+
+      const id = await this.client.relayMessage(sender, message, {
+        messageId,
+        additionalNodes,
+      });
+
+      m.key = {
+        id: id,
+        remoteJid: sender,
+        participant: isPnUser(sender) ? sender : undefined,
+        fromMe: true,
+      };
+
+      for (const [key, value] of Object.entries(m)) {
+        if (!value || (isArray(value) && value.length) === 0) {
+          delete m[key];
+        }
+      }
+
+      return m;
+    } catch (error) {
+      this.logger.error(error);
+      throw new InternalServerErrorException(error);
+    }
   }
 
   public async locationMessage(data: SendLocationDto) {
