@@ -5184,6 +5184,21 @@ export class BaileysStartupService extends ChannelStartupService {
     if (messageRaw.message.extendedTextMessage) {
       messageRaw.messageType = 'conversation';
       messageRaw.message.conversation = messageRaw.message.extendedTextMessage.text;
+
+      /**
+       * Keep the reply metadata before dropping the wrapper.
+       *
+       * `stanzaId`, `participant` and `quotedMessage` live inside the
+       * extendedTextMessage's own contextInfo. Deleting the wrapper dropped
+       * them, so every text reply reached webhooks and the database unquoted,
+       * while media replies (never flattened) kept theirs.
+       */
+      const quotedContext = messageRaw.message.extendedTextMessage.contextInfo;
+
+      if (quotedContext) {
+        messageRaw.contextInfo = { ...(messageRaw.contextInfo ?? {}), ...quotedContext };
+      }
+
       delete messageRaw.message.extendedTextMessage;
     }
 
@@ -5685,12 +5700,22 @@ export class BaileysStartupService extends ChannelStartupService {
       if (!message.pushName) {
         if (messageKey.fromMe) {
           message.pushName = 'Você';
+        } else if (messageKey.participant) {
+          /**
+           * The sender comes from the message key.
+           *
+           * `contextInfo.participant` is the author of the QUOTED message, not
+           * of this one, so it may only stand in when the key carries nothing.
+           * It used to be checked first, which was harmless while contextInfo
+           * never carried a participant — and would mislabel the sender of a
+           * text reply now that the quote is preserved.
+           */
+          message.pushName = messageKey.participant.split('@')[0];
         } else if (message.contextInfo) {
           const contextInfo = message.contextInfo as { participant?: string };
+
           if (contextInfo.participant) {
             message.pushName = contextInfo.participant.split('@')[0];
-          } else if (messageKey.participant) {
-            message.pushName = messageKey.participant.split('@')[0];
           }
         }
       }
