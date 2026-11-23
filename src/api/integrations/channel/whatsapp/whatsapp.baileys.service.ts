@@ -1201,6 +1201,20 @@ export class BaileysStartupService extends ChannelStartupService {
             }
           }
 
+          // FIX: Fallback pushName if not present in received payload
+          if (!received.pushName && !received.key.fromMe) {
+            const participantJid = received.participant || received.key.participant || received.key.remoteJid;
+            if (participantJid) {
+              const contact = await this.prismaRepository.contact.findFirst({
+                where: { instanceId: this.instanceId, remoteJid: participantJid },
+                select: { pushName: true }
+              });
+              if (contact && contact.pushName) {
+                received.pushName = contact.pushName;
+              }
+            }
+          }
+
           const messageRaw = this.prepareMessage(received);
 
           if (messageRaw.messageType === 'pollUpdateMessage') {
@@ -1355,7 +1369,20 @@ export class BaileysStartupService extends ChannelStartupService {
           if (this.configService.get<Database>('DATABASE').SAVE_DATA.NEW_MESSAGE) {
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const { pollUpdates, ...messageData } = messageRaw;
-            const msg = await this.prismaRepository.message.create({ data: messageData });
+
+            const existingMessage = await this.prismaRepository.$queryRaw`
+              SELECT id, status, "messageTimestamp" FROM "Message"
+              WHERE "instanceId" = ${this.instanceId}
+              AND "key"->>'id' = ${received.key.id}
+            ` as any[];
+
+            let msg;
+            if (existingMessage && existingMessage.length > 0) {
+              msg = existingMessage[0];
+              this.logger.info(`Message already exists, ignoring create: ${received.key.id}`);
+            } else {
+              msg = await this.prismaRepository.message.create({ data: messageData });
+            }
 
             const { remoteJid } = received.key;
             const timestamp = msg.messageTimestamp;
@@ -1495,15 +1522,18 @@ export class BaileysStartupService extends ChannelStartupService {
 
           const contactRaw: {
             remoteJid: string;
-            pushName: string;
+            pushName?: string;
             profilePicUrl?: string;
             instanceId: string;
           } = {
             remoteJid: received.key.remoteJid,
-            pushName: received.key.fromMe ? '' : received.key.fromMe == null ? '' : received.pushName,
             profilePicUrl: (await this.profilePicture(received.key.remoteJid)).profilePictureUrl,
             instanceId: this.instanceId,
           };
+
+          if (!received.key.fromMe && received.pushName) {
+            contactRaw.pushName = received.pushName;
+          }
 
           if (contactRaw.remoteJid === 'status@broadcast') {
             continue;

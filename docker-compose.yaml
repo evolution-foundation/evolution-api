@@ -9,12 +9,11 @@ services:
       - redis
       - evolution-postgres
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8081:8080"
     volumes:
       - evolution_instances:/evolution/instances
     networks:
       - evolution-net
-      - dokploy-network
     env_file:
       - .env
     expose:
@@ -41,9 +40,6 @@ services:
       evolution-net:
         aliases:
           - evolution-redis
-      dokploy-network:
-        aliases:
-          - evolution-redis
     expose:
       - "6379"
 
@@ -67,7 +63,6 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - evolution-net
-      - dokploy-network
     expose:
       - "5432"
 
@@ -80,5 +75,3 @@ networks:
   evolution-net:
     name: evolution-net
     driver: bridge
-  dokploy-network:
-    external: true

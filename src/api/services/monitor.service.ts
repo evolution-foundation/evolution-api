@@ -271,6 +271,22 @@ export class WAMonitoringService {
   }
 
   private async setInstance(instanceData: InstanceDto) {
+    if (this.waInstances[instanceData.instanceName]) {
+      this.logger.warn(`Forcefully closing existing instance ${instanceData.instanceName} to prevent zombies`);
+      try {
+        const existing = this.waInstances[instanceData.instanceName];
+        if (existing?.client?.ws) {
+          existing.client.ws.close();
+        }
+        if (existing?.client?.end) {
+          existing.client.end(undefined);
+        }
+      } catch (err) {
+        this.logger.error(`Error closing zombie instance ${instanceData.instanceName}: ${err}`);
+      }
+      delete this.waInstances[instanceData.instanceName];
+    }
+
     const instance = channelController.init(instanceData, {
       configService: this.configService,
       eventEmitter: this.eventEmitter,
