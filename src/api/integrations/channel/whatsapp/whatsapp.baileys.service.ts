@@ -2638,10 +2638,10 @@ export class BaileysStartupService extends ChannelStartupService {
         }
       }
 
-      const linkPreview = options?.linkPreview === false ? false : undefined;
+      const linkPreview = options?.linkPreview === true ? true : false;
 
       let previewContext: any = undefined;
-      if (linkPreview !== false && (message as any)?.conversation) {
+      if (linkPreview === true && (message as any)?.conversation) {
         previewContext = await this.generateLinkPreview((message as any).conversation);
       }
 
