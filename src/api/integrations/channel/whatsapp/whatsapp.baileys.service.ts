@@ -4346,7 +4346,10 @@ export class BaileysStartupService extends ChannelStartupService {
         }
       }
 
-      if ('messageContextInfo' in msg.message && Object.keys(msg.message).length === 1) {
+      if (
+        Object.keys(msg.message).length === 1 &&
+        Object.prototype.hasOwnProperty.call(msg.message, 'messageContextInfo')
+      ) {
         this.logger.verbose('Message contains only messageContextInfo, skipping media processing');
         return null;
       }
