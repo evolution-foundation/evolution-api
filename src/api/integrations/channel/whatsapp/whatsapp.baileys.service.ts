@@ -656,24 +656,38 @@ export class BaileysStartupService extends ChannelStartupService {
       if (full) {
         return webMessageInfo[0];
       }
-      if (webMessageInfo[0].message?.pollCreationMessage) {
-        const messageSecretBase64 = webMessageInfo[0].message?.messageContextInfo?.messageSecret;
+
+      // Baileys only skips a retry resend when getMessage resolves to a falsy value. Returning an
+      // object here (for example `{ conversation: '' }`) makes it relay an EMPTY message reusing the
+      // original message id, which shows up in the chat as a bubble with a timestamp and no content.
+      const message = webMessageInfo[0]?.message;
+
+      if (!message) {
+        this.logger.debug(`getMessage: message ${key.id} not found, skipping retry resend`);
+
+        return undefined;
+      }
+
+      if (message.pollCreationMessage) {
+        const messageSecretBase64 = message.messageContextInfo?.messageSecret;
 
         if (typeof messageSecretBase64 === 'string') {
           const messageSecret = Buffer.from(messageSecretBase64, 'base64');
 
           const msg = {
             messageContextInfo: { messageSecret },
-            pollCreationMessage: webMessageInfo[0].message?.pollCreationMessage,
+            pollCreationMessage: message.pollCreationMessage,
           };
 
           return msg;
         }
       }
 
-      return webMessageInfo[0].message;
-    } catch {
-      return { conversation: '' };
+      return message;
+    } catch (error) {
+      this.logger.debug(`getMessage: lookup for ${key.id} failed, skipping retry resend: ${error?.toString()}`);
+
+      return undefined;
     }
   }
 
