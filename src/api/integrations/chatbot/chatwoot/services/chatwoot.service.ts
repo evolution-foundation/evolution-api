@@ -979,9 +979,15 @@ export class ChatwootService {
       return null;
     }
 
+    const contactId = contact.id || (contact as any)?.payload?.contact?.id;
+    if (!contactId) {
+      this.logger.warn('contact id not found');
+      return null;
+    }
+
     const conversations = (await client.contacts.listConversations({
       accountId: this.provider.accountId,
-      id: contact.id,
+      id: contactId,
     })) as any;
 
     return (
@@ -989,6 +995,81 @@ export class ChatwootService {
         (conversation) => conversation.inbox_id === inbox.id && conversation.status === 'open',
       ) || undefined
     );
+  }
+
+  /**
+   * Resolves the bot contact conversation used for QR/status commands.
+   * Reopens the latest inbox conversation when automations resolve it after init.
+   */
+  public async getOrOpenBotConversation(
+    instance: InstanceDto,
+    inbox: inbox,
+    contact: generic_id & contact,
+  ): Promise<conversation | null> {
+    const openConversation = await this.getOpenConversationByContact(instance, inbox, contact);
+    if (openConversation) {
+      return openConversation;
+    }
+
+    const client = await this.clientCw(instance);
+    if (!client) {
+      this.logger.warn('client not found');
+      return null;
+    }
+
+    const contactId = contact.id || (contact as any)?.payload?.contact?.id;
+    if (!contactId) {
+      this.logger.warn('contact id not found');
+      return null;
+    }
+
+    const conversations = (await client.contacts.listConversations({
+      accountId: this.provider.accountId,
+      id: contactId,
+    })) as any;
+
+    const inboxConversations = (conversations?.payload ?? [])
+      .filter((conversation: conversation) => conversation.inbox_id === inbox.id)
+      .sort((a: conversation, b: conversation) => b.id - a.id);
+
+    const latestConversation = inboxConversations[0];
+
+    if (latestConversation) {
+      if (latestConversation.status !== 'open') {
+        await client.conversations.toggleStatus({
+          accountId: this.provider.accountId,
+          conversationId: latestConversation.id,
+          data: {
+            status: 'open',
+          },
+        });
+        latestConversation.status = 'open';
+      }
+
+      this.logger.log(`Reopened bot conversation ID: ${latestConversation.id} for ${instance.instanceName}`);
+      return latestConversation;
+    }
+
+    const created = await client.conversations.create({
+      accountId: this.provider.accountId,
+      data: {
+        contact_id: contactId.toString(),
+        inbox_id: inbox.id.toString(),
+      },
+    });
+
+    if (!created) {
+      this.logger.warn('bot conversation could not be created');
+      return null;
+    }
+
+    this.logger.log(`Created bot conversation ID: ${created.id} for ${instance.instanceName}`);
+    return created;
+  }
+
+  private isBotInitCommand(command: string): boolean {
+    const normalized = command.trim().toLowerCase();
+    return normalized === 'init' || normalized === 'iniciar' || normalized.startsWith('init:');
   }
 
   public async createBotMessage(
@@ -1022,10 +1103,10 @@ export class ChatwootService {
       return null;
     }
 
-    const conversation = await this.getOpenConversationByContact(instance, filterInbox, contact);
+    const conversation = await this.getOrOpenBotConversation(instance, filterInbox, contact);
 
     if (!conversation) {
-      this.logger.warn('conversation not found');
+      this.logger.warn('bot conversation not found');
       return;
     }
 
@@ -1152,10 +1233,10 @@ export class ChatwootService {
       return null;
     }
 
-    const conversation = await this.getOpenConversationByContact(instance, filterInbox, contact);
+    const conversation = await this.getOrOpenBotConversation(instance, filterInbox, contact);
 
     if (!conversation) {
-      this.logger.warn('conversation not found');
+      this.logger.warn('bot conversation not found');
       return;
     }
 
@@ -1346,6 +1427,12 @@ export class ChatwootService {
 
       const senderName = body?.conversation?.messages[0]?.sender?.available_name || body?.sender?.name;
       const waInstance = this.waMonitor.waInstances[instance.instanceName];
+
+      if (!waInstance) {
+        this.logger.warn(`wa instance not found: ${instance.instanceName}`);
+        return { message: 'bot' };
+      }
+
       instance.instanceId = waInstance.instanceId;
 
       if (body.event === 'message_updated' && body.content_attributes?.deleted) {
@@ -1376,7 +1463,7 @@ export class ChatwootService {
       if (chatId === '123456' && body.message_type === 'outgoing') {
         const command = messageReceived.replace('/', '');
 
-        if (cwBotContact && (command.includes('init') || command.includes('iniciar'))) {
+        if (cwBotContact && this.isBotInitCommand(command)) {
           const state = waInstance?.connectionStatus?.state;
 
           if (state !== 'open') {
@@ -2500,14 +2587,6 @@ export class ChatwootService {
           fileStream.push(fileData);
           fileStream.push(null);
 
-          await this.createBotQr(
-            instance,
-            i18next.t('qrgeneratedsuccesfully'),
-            'incoming',
-            fileStream,
-            `${instance.instanceName}.png`,
-          );
-
           let msgQrCode = `⚡️${i18next.t('qrgeneratedsuccesfully')}\n\n${i18next.t('scanqr')}`;
 
           if (body?.qrcode?.pairingCode) {
@@ -2519,7 +2598,7 @@ export class ChatwootService {
               )}`;
           }
 
-          await this.createBotMessage(instance, msgQrCode, 'incoming');
+          await this.createBotQr(instance, msgQrCode, 'incoming', fileStream, `${instance.instanceName}.png`);
         }
       }
     } catch (error) {
