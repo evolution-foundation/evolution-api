@@ -2240,6 +2240,17 @@ export class ChatwootService {
           return;
         }
 
+        if (body.key.id && this.isImportHistoryAvailable()) {
+          const sourceId = 'WAID:' + body.key.id;
+          const messageAlreadySaved = await chatwootImport.getExistingSourceIds([sourceId], getConversation);
+          if (messageAlreadySaved) {
+            if (messageAlreadySaved.size > 0) {
+              this.logger.warn('Message already saved on chatwoot');
+              return;
+            }
+          }
+        }
+
         const messageType = body.key.fromMe ? 'outgoing' : 'incoming';
 
         if (isMedia) {
