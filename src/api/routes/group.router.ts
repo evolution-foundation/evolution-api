@@ -6,11 +6,14 @@ import {
   GroupDescriptionDto,
   GroupInvite,
   GroupJid,
+  GroupJoinApprovalModeDto,
+  GroupMemberAddModeDto,
   GroupPictureDto,
   GroupSendInvite,
   GroupSubjectDto,
   GroupToggleEphemeralDto,
   GroupUpdateParticipantDto,
+  GroupUpdateParticipantRequestDto,
   GroupUpdateSettingDto,
 } from '@api/dto/group.dto';
 import { groupController } from '@api/server.module';
@@ -21,10 +24,13 @@ import {
   groupInviteSchema,
   groupJidSchema,
   groupSendInviteSchema,
+  joinApprovalModeSchema,
+  memberAddModeSchema,
   toggleEphemeralSchema,
   updateGroupDescriptionSchema,
   updateGroupPictureSchema,
   updateGroupSubjectSchema,
+  updateParticipantRequestSchema,
   updateParticipantsSchema,
   updateSettingsSchema,
 } from '@validate/validate.schema';
@@ -182,6 +188,46 @@ export class GroupRouter extends RouterBroker {
           schema: toggleEphemeralSchema,
           ClassRef: GroupToggleEphemeralDto,
           execute: (instance, data) => groupController.toggleEphemeral(instance, data),
+        });
+
+        res.status(HttpStatus.CREATED).json(response);
+      })
+      .post(this.routerPath('memberAddMode'), ...guards, async (req, res) => {
+        const response = await this.groupValidate<GroupMemberAddModeDto>({
+          request: req,
+          schema: memberAddModeSchema,
+          ClassRef: GroupMemberAddModeDto,
+          execute: (instance, data) => groupController.updateMemberAddMode(instance, data),
+        });
+
+        res.status(HttpStatus.CREATED).json(response);
+      })
+      .post(this.routerPath('joinApprovalMode'), ...guards, async (req, res) => {
+        const response = await this.groupValidate<GroupJoinApprovalModeDto>({
+          request: req,
+          schema: joinApprovalModeSchema,
+          ClassRef: GroupJoinApprovalModeDto,
+          execute: (instance, data) => groupController.updateJoinApprovalMode(instance, data),
+        });
+
+        res.status(HttpStatus.CREATED).json(response);
+      })
+      .get(this.routerPath('participantRequests'), ...guards, async (req, res) => {
+        const response = await this.groupValidate<GroupJid>({
+          request: req,
+          schema: groupJidSchema,
+          ClassRef: GroupJid,
+          execute: (instance, data) => groupController.findParticipantRequests(instance, data),
+        });
+
+        res.status(HttpStatus.OK).json(response);
+      })
+      .post(this.routerPath('updateParticipantRequests'), ...guards, async (req, res) => {
+        const response = await this.groupValidate<GroupUpdateParticipantRequestDto>({
+          request: req,
+          schema: updateParticipantRequestSchema,
+          ClassRef: GroupUpdateParticipantRequestDto,
+          execute: (instance, data) => groupController.updateParticipantRequests(instance, data),
         });
 
         res.status(HttpStatus.CREATED).json(response);

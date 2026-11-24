@@ -50,6 +50,10 @@ export class Metadata {
 export class SendTextDto extends Metadata {
   text: string;
 }
+export class ForwardMessageDto {
+  number: string;
+  messageId: string;
+}
 export class SendPresence extends Metadata {
   text: string;
 }

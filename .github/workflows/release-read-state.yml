@@ -1,0 +1,72 @@
+name: Read-state release candidate
+
+on:
+  push:
+    branches:
+      - codex/read-state-sync
+      - feat/group-admin-controls-and-forward
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+        env:
+          DATABASE_PROVIDER: postgresql
+
+      - name: Test read-state contract
+        run: node --import tsx --test test/read-state.test.ts
+
+      - name: Check code quality
+        run: npm run lint:check
+
+      - name: Build application
+        run: npm run build
+
+      - name: Set image names
+        id: image
+        shell: bash
+        run: |
+          echo "tag=evolution-api-fork:release-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "archive=evolution-api-fork-release-${GITHUB_SHA}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker candidate
+        run: docker build --tag "${{ steps.image.outputs.tag }}" .
+
+      - name: Export image and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker save "${{ steps.image.outputs.tag }}" | gzip -1 > "${{ steps.image.outputs.archive }}"
+          sha256sum "${{ steps.image.outputs.archive }}" > "${{ steps.image.outputs.archive }}.sha256"
+
+      - name: Upload release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-image-${{ github.sha }}
+          path: |
+            ${{ steps.image.outputs.archive }}
+            ${{ steps.image.outputs.archive }}.sha256
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0

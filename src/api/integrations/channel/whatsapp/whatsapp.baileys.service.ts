@@ -22,11 +22,14 @@ import {
   GroupDescriptionDto,
   GroupInvite,
   GroupJid,
+  GroupJoinApprovalModeDto,
+  GroupMemberAddModeDto,
   GroupPictureDto,
   GroupSendInvite,
   GroupSubjectDto,
   GroupToggleEphemeralDto,
   GroupUpdateParticipantDto,
+  GroupUpdateParticipantRequestDto,
   GroupUpdateSettingDto,
 } from '@api/dto/group.dto';
 import { InstanceDto, SetPresenceDto } from '@api/dto/instance.dto';
@@ -34,6 +37,7 @@ import { HandleLabelDto, LabelDto } from '@api/dto/label.dto';
 import {
   Button,
   ContactMessage,
+  ForwardMessageDto,
   KeyType,
   MediaMessage,
   Options,
@@ -152,7 +156,28 @@ import sharp from 'sharp';
 import { PassThrough, Readable } from 'stream';
 import { v4 } from 'uuid';
 
+import {
+  AppStateSelfHealer,
+  createSocketHealTarget,
+  suppressHealReplay,
+  watchAppStateFailures,
+} from './app-state-self-heal';
 import { BaileysMessageProcessor } from './baileysMessage.processor';
+import { attachLids } from './numbers-lid';
+import {
+  buildGroupReadSelfPayload,
+  chatReadStateUpdates,
+  collectGroupReadSelf,
+  fillRemoteJidAlt,
+  ownAccountJids,
+  pickLatestMessageId,
+  readRequestToChatAddressing,
+  ReadStateValidationError,
+  resolveReadStateLids,
+  syncMessageReadState,
+  toChatAddressingJid,
+} from './read-state';
+import { attachStatusAck } from './status-ack';
 import { useVoiceCallsBaileys } from './voiceCalls/useVoiceCallsBaileys';
 
 export interface ExtendedIMessageKey extends proto.IMessageKey {
@@ -224,6 +249,12 @@ async function getVideoDuration(input: Buffer | string | Readable): Promise<numb
   return Math.round(parseFloat(duration));
 }
 
+// Throttle global de groupMetadata: serializa e espaca as buscas pra nao
+// estourar o rate-limit (429) do WhatsApp em contas com centenas de grupos.
+let __groupMetaChain: Promise<unknown> = Promise.resolve();
+let __groupMetaLastAt = 0;
+const __GROUP_META_MIN_INTERVAL_MS = 2000;
+
 export class BaileysStartupService extends ChannelStartupService {
   private messageProcessor = new BaileysMessageProcessor();
 
@@ -251,10 +282,33 @@ export class BaileysStartupService extends ChannelStartupService {
   private endSession = false;
   private logBaileys = this.configService.get<Log>('LOG').BAILEYS;
   private eventProcessingQueue: Promise<void> = Promise.resolve();
+  // Survives reconnects (the socket is rebuilt each time) so cooldown/attempt limits hold.
+  private appStateHealer?: AppStateSelfHealer;
+
+  private getAppStateHealer(): AppStateSelfHealer {
+    this.appStateHealer ??= new AppStateSelfHealer({
+      instanceName: this.instance.name,
+      log: this.logger,
+      getTarget: () =>
+        this.client
+          ? createSocketHealTarget(this.client, () => !this.endSession && this.stateConnection?.state === 'open')
+          : undefined,
+    });
+    return this.appStateHealer;
+  }
 
   // Cache TTL constants (in seconds)
   private readonly MESSAGE_CACHE_TTL_SECONDS = 5 * 60; // 5 minutes - avoid duplicate message processing
   private readonly UPDATE_CACHE_TTL_SECONDS = 30 * 60; // 30 minutes - avoid duplicate status updates
+
+  private _lastStream515At = 0;
+
+  // Reconnect behaviour for the Baileys "stream:error 515" sequence.
+  // After WhatsApp emits 515 it usually closes with `loggedOut`; that close is *not* a real logout
+  // and we should reconnect. We treat any close arriving within this grace window as 515-driven.
+  private static readonly STREAM_515_RECONNECT_GRACE_MS = 30_000;
+  // The numeric WhatsApp stream-error code that triggers the grace-period reconnect above.
+  private static readonly STREAM_ERROR_CODE_RECONNECT = '515';
 
   public stateConnection: wa.StateConnection = { state: 'close' };
 
@@ -424,9 +478,15 @@ export class BaileysStartupService extends ChannelStartupService {
     }
 
     if (connection === 'close') {
+      this.appStateHealer?.stop();
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406];
-      const shouldReconnect = !codesToNotReconnect.includes(statusCode);
+      // If a stream:error 515 (Baileys' "restart needed" handshake) just fired,
+      // a follow-up loggedOut is the expected restart signal — not an actual
+      // logout — so reconnect anyway.
+      const recentStream515 = Date.now() - this._lastStream515At < BaileysStartupService.STREAM_515_RECONNECT_GRACE_MS;
+      const shouldReconnect =
+        !codesToNotReconnect.includes(statusCode) || (statusCode === DisconnectReason.loggedOut && recentStream515);
       if (shouldReconnect) {
         await this.connectToWhatsapp(this.phoneNumber);
       } else {
@@ -553,6 +613,20 @@ export class BaileysStartupService extends ChannelStartupService {
     }
   }
 
+  public async forwardMessage(data: ForwardMessageDto) {
+    try {
+      const fullMsg = (await this.getMessage({ id: data.messageId }, true)) as unknown as WAMessage;
+      if (!fullMsg?.message) {
+        throw new BadRequestException('Message not found');
+      }
+      // Resolve PN JIDs through the normal WhatsApp lookup; group/LID addresses stay opaque.
+      const number = data.number.replace(/^(\d+)@s\.whatsapp\.net$/, '$1');
+      return await this.sendMessageWithTyping<AnyMessageContent>(number, { forward: fullMsg, force: true });
+    } catch (error) {
+      throw new BadRequestException('Error forwarding message', error.toString());
+    }
+  }
+
   private async defineAuthState() {
     const db = this.configService.get<Database>('DATABASE');
     const cache = this.configService.get<CacheConf>('CACHE');
@@ -638,7 +712,10 @@ export class BaileysStartupService extends ChannelStartupService {
     const socketConfig: UserFacingSocketConfig = {
       ...options,
       version,
-      logger: P({ level: this.logBaileys }),
+      // Watches Baileys' warnings for an app-state LTHash mismatch (see app-state-self-heal.ts).
+      logger: watchAppStateFailures(P({ level: this.logBaileys }), (failure) => {
+        this.getAppStateHealer().report(failure);
+      }),
       printQRInTerminal: false,
       auth: {
         creds: this.instance.authState.state.creds,
@@ -646,6 +723,11 @@ export class BaileysStartupService extends ChannelStartupService {
       },
       msgRetryCounterCache: this.msgRetryCounterCache,
       generateHighQualityLinkPreview: true,
+      // Baileys ships with app-state MAC checks off. With them off, an app-state
+      // patch decoded with the wrong key is dropped silently and our own patches
+      // can go out inconsistent (the server answers 401 device_removed). Fail
+      // closed: an invalid patch MAC makes Baileys refetch a snapshot instead.
+      appStateMacVerification: { patch: true, snapshot: true },
       getMessage: async (key) => (await this.getMessage(key)) as Promise<proto.IMessage>,
       ...browserOptions,
       markOnlineOnConnect: this.localSettings.alwaysOnline,
@@ -696,12 +778,25 @@ export class BaileysStartupService extends ChannelStartupService {
     this.endSession = false;
 
     this.client = makeWASocket(socketConfig);
+    // A self-heal snapshot replays every record as a live event (stale reads, old deletes): drop those.
+    suppressHealReplay(this.client.ev);
+    this.getAppStateHealer().start();
+    // Baileys never acks the top-level <status> stanza: the server drops the stream ~50 min later (Baileys#2858).
+    if (!attachStatusAck(this.client as any, (error) => this.logger.warn(`status ack failed: ${String(error)}`))) {
+      this.logger.info('Baileys already handles CB:status: status-ack.ts is no longer needed');
+    }
 
     if (this.localSettings.wavoipToken && this.localSettings.wavoipToken.length > 0) {
       useVoiceCallsBaileys(this.localSettings.wavoipToken, this.client, this.connectionStatus.state as any, true);
     }
 
     this.eventHandler();
+
+    this.client.ws.on('CB:stream:error', (node: { attrs?: { code?: string | number } }) => {
+      if (String(node?.attrs?.code) === BaileysStartupService.STREAM_ERROR_CODE_RECONNECT) {
+        this._lastStream515At = Date.now();
+      }
+    });
 
     this.client.ws.on('CB:call', (packet) => {
       console.log('CB:call', packet);
@@ -781,9 +876,11 @@ export class BaileysStartupService extends ChannelStartupService {
         }
       >[],
     ) => {
-      const chatsRaw = chats.map((chat) => {
-        return { remoteJid: chat.id, instanceId: this.instanceId };
-      });
+      const readStateObservedAt = new Date().toISOString();
+      const chatsRaw = await resolveReadStateLids(
+        chatReadStateUpdates(chats, this.instanceId, readStateObservedAt),
+        (lid) => this.client.signalRepository.lidMapping.getPNForLID(lid),
+      );
 
       this.sendDataWebhook(Events.CHATS_UPDATE, chatsRaw);
 
@@ -1034,13 +1131,16 @@ export class BaileysStartupService extends ChannelStartupService {
             continue;
           }
 
+          await fillRemoteJidAlt(m.key, (lid) => this.client.signalRepository.lidMapping.getPNForLID(lid));
+
           if (!m.pushName && !m.key.fromMe) {
             const participantJid = m.participant || m.key.participant || m.key.remoteJid;
-            if (participantJid && contactsMap.has(participantJid)) {
-              m.pushName = contactsMap.get(participantJid).name;
-            } else if (participantJid) {
-              m.pushName = participantJid.split('@')[0];
-            }
+            // Contacts may be keyed by the phone JID while the message is LID-addressed.
+            const known = [participantJid, m.key.participantAlt, m.key.remoteJidAlt].find(
+              (jid) => jid && contactsMap.has(jid) && contactsMap.get(jid).name,
+            );
+            // No digits fallback: a JID is not a name, and consumers would store it as one.
+            if (known) m.pushName = contactsMap.get(known).name;
           }
 
           messagesRaw.push(this.prepareMessage(m));
@@ -1475,6 +1575,7 @@ export class BaileysStartupService extends ChannelStartupService {
           this.logger.verbose(messageRaw);
 
           sendTelemetry(`received.message.${messageRaw.messageType ?? 'unknown'}`);
+          await fillRemoteJidAlt(messageRaw.key, (lid) => this.client.signalRepository.lidMapping.getPNForLID(lid));
           if (messageRaw.key.remoteJid?.includes('@lid') && messageRaw.key.remoteJidAlt) {
             messageRaw.key.remoteJid = messageRaw.key.remoteJidAlt;
           }
@@ -1939,6 +2040,8 @@ export class BaileysStartupService extends ChannelStartupService {
                   this.updateMessagesReadedByTimestamp(remoteJid, remotesJidMap[remoteJid]),
                 ),
               );
+
+              await this.forwardGroupReadSelf(payload, settings);
             }
 
             if (events['presence.update']) {
@@ -2154,6 +2257,12 @@ export class BaileysStartupService extends ChannelStartupService {
 
     // NOTE: NÃO DEVEMOS GERAR O messageId AQUI, SOMENTE SE VIER INFORMADO POR PARAMETRO. A GERAÇÃO ANTERIOR IMPEDE O WZAP DE IDENTIFICAR A SOURCE.
     if (messageId) option.messageId = messageId;
+
+    // Native forwards already contain a complete WAMessage, including media references.
+    // Do not wrap them in another forward or overwrite their original contextInfo.
+    if (message['forward']) {
+      return await this.client.sendMessage(sender, message as AnyMessageContent, option);
+    }
 
     if (message['viewOnceMessage']) {
       const m = generateWAMessageFromContent(sender, message, {
@@ -3670,20 +3779,27 @@ export class BaileysStartupService extends ChannelStartupService {
       );
     }
 
+    // Opt-in only: the default response shape must not change for existing callers.
+    // Runs after the cache write so the real LID never leaks into IsOnWhatsapp.lid (a 'lid' marker there).
+    if (data.includeLid === true) {
+      return await attachLids(onWhatsapp, (pns) => this.client.signalRepository.lidMapping.getLIDsForPNs(pns), {
+        warn: (message) => this.logger.warn(message),
+      });
+    }
+
     return onWhatsapp;
   }
 
   public async markMessageAsRead(data: ReadMessageDto) {
     try {
-      const keys: proto.IMessageKey[] = [];
-      data.readMessages.forEach((read) => {
-        if (isJidGroup(read.remoteJid) || isPnUser(read.remoteJid)) {
-          keys.push({ remoteJid: read.remoteJid, fromMe: read.fromMe, id: read.id });
-        }
-      });
-      await this.client.readMessages(keys);
-      return { message: 'Read messages', read: 'success' };
+      const addressed = await readRequestToChatAddressing(data, (pn) =>
+        this.client.signalRepository.lidMapping.getLIDForPN(pn),
+      );
+      return await syncMessageReadState(this.client, addressed);
     } catch (error) {
+      if (error instanceof ReadStateValidationError) {
+        throw new BadRequestException(error.message);
+      }
       throw new InternalServerErrorException('Read messages fail', error.toString());
     }
   }
@@ -3749,7 +3865,7 @@ export class BaileysStartupService extends ChannelStartupService {
         last_message = await this.getLastMessage(number);
       } else {
         last_message = data.lastMessage;
-        last_message.messageTimestamp = last_message?.messageTimestamp ?? Date.now();
+        last_message.messageTimestamp = last_message?.messageTimestamp ?? Math.floor(Date.now() / 1000);
         number = last_message?.key?.remoteJid;
       }
 
@@ -3757,7 +3873,15 @@ export class BaileysStartupService extends ChannelStartupService {
         throw new NotFoundException('Last message not found');
       }
 
-      await this.client.chatModify({ markRead: false, lastMessages: [last_message] }, createJid(number));
+      const resolveLid = (pn: string) => this.client.signalRepository.lidMapping.getLIDForPN(pn);
+      const chatJid = await toChatAddressingJid(createJid(number), resolveLid);
+      if (last_message?.key?.remoteJid) {
+        last_message = {
+          ...last_message,
+          key: { ...last_message.key, remoteJid: await toChatAddressingJid(last_message.key.remoteJid, resolveLid) },
+        };
+      }
+      await this.client.chatModify({ markRead: false, lastMessages: [last_message] }, chatJid);
 
       return { chatId: number, markedChatUnread: true };
     } catch (error) {
@@ -4285,21 +4409,27 @@ export class BaileysStartupService extends ChannelStartupService {
 
   // Group
   private async updateGroupMetadataCache(groupJid: string) {
-    try {
-      const meta = await this.client.groupMetadata(groupJid);
-
-      const cacheConf = this.configService.get<CacheConf>('CACHE');
-
-      if ((cacheConf?.REDIS?.ENABLED && cacheConf?.REDIS?.URI !== '') || cacheConf?.LOCAL?.ENABLED) {
-        this.logger.verbose(`Updating cache for group: ${groupJid}`);
-        await groupMetadataCache.set(groupJid, { timestamp: Date.now(), data: meta });
+    const task = __groupMetaChain.then(async () => {
+      const wait = __GROUP_META_MIN_INTERVAL_MS - (Date.now() - __groupMetaLastAt);
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      __groupMetaLastAt = Date.now();
+      try {
+        const meta = await this.client.groupMetadata(groupJid);
+        const cacheConf = this.configService.get<CacheConf>('CACHE');
+        if ((cacheConf?.REDIS?.ENABLED && cacheConf?.REDIS?.URI !== '') || cacheConf?.LOCAL?.ENABLED) {
+          await groupMetadataCache.set(groupJid, { timestamp: Date.now(), data: meta });
+        }
+        return meta;
+      } catch (error) {
+        this.logger.error(error);
+        return null;
       }
-
-      return meta;
-    } catch (error) {
-      this.logger.error(error);
-      return null;
-    }
+    });
+    __groupMetaChain = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
   }
 
   private getGroupMetadataCache = async (groupJid: string) => {
@@ -4432,6 +4562,15 @@ export class BaileysStartupService extends ChannelStartupService {
         descId: group.descId,
         restrict: group.restrict,
         announce: group.announce,
+        joinApprovalMode: group.joinApprovalMode,
+        memberAddMode: group.memberAddMode,
+        // In complete Baileys metadata, an absent ephemeral node means disabled.
+        ephemeralDuration:
+          typeof group.joinApprovalMode === 'boolean' && typeof group.memberAddMode === 'boolean'
+            ? group.ephemeralDuration === undefined
+              ? 0
+              : group.ephemeralDuration
+            : group.ephemeralDuration,
         participants: group.participants,
         isCommunity: group.isCommunity,
         isCommunityAnnounce: group.isCommunityAnnounce,
@@ -4450,7 +4589,8 @@ export class BaileysStartupService extends ChannelStartupService {
 
     let groups = [];
     for (const group of fetch) {
-      const picture = await this.profilePicture(group.id);
+      const wantDetails = getParticipants.getParticipants == 'true';
+      const picture = wantDetails ? await this.profilePicture(group.id) : null;
 
       const result = {
         id: group.id,
@@ -4465,6 +4605,15 @@ export class BaileysStartupService extends ChannelStartupService {
         descId: group.descId,
         restrict: group.restrict,
         announce: group.announce,
+        joinApprovalMode: group.joinApprovalMode,
+        memberAddMode: group.memberAddMode,
+        // In complete Baileys metadata, an absent ephemeral node means disabled.
+        ephemeralDuration:
+          typeof group.joinApprovalMode === 'boolean' && typeof group.memberAddMode === 'boolean'
+            ? group.ephemeralDuration === undefined
+              ? 0
+              : group.ephemeralDuration
+            : group.ephemeralDuration,
         isCommunity: group.isCommunity,
         isCommunityAnnounce: group.isCommunityAnnounce,
         linkedParent: group.linkedParent,
@@ -4594,6 +4743,43 @@ export class BaileysStartupService extends ChannelStartupService {
       return { success: true };
     } catch (error) {
       throw new BadRequestException('Error updating setting', error.toString());
+    }
+  }
+
+  public async updateMemberAddMode(update: GroupMemberAddModeDto) {
+    try {
+      await this.client.groupMemberAddMode(update.groupJid, update.mode);
+      return { success: true };
+    } catch (error) {
+      throw new BadRequestException('Error updating member add mode', error.toString());
+    }
+  }
+
+  public async updateJoinApprovalMode(update: GroupJoinApprovalModeDto) {
+    try {
+      await this.client.groupJoinApprovalMode(update.groupJid, update.mode);
+      return { success: true };
+    } catch (error) {
+      throw new BadRequestException('Error updating join approval mode', error.toString());
+    }
+  }
+
+  public async findParticipantRequests(id: GroupJid) {
+    try {
+      const requests = await this.client.groupRequestParticipantsList(id.groupJid);
+      return { requests: requests || [] };
+    } catch (error) {
+      throw new BadRequestException('Error fetching participant requests', error.toString());
+    }
+  }
+
+  public async updateParticipantRequests(update: GroupUpdateParticipantRequestDto) {
+    try {
+      const participants = update.participants.map((p) => (p.includes('@') ? p : `${p}@s.whatsapp.net`));
+      const result = await this.client.groupRequestParticipantsUpdate(update.groupJid, participants, update.action);
+      return { updateParticipantRequests: result };
+    } catch (error) {
+      throw new BadRequestException('Error updating participant requests', error.toString());
     }
   }
 
@@ -4728,6 +4914,45 @@ export class BaileysStartupService extends ChannelStartupService {
         this.chatwootService.syncLostMessages({ instanceName: this.instance.name }, chatwootConfig, prepare);
       });
       task.start();
+    }
+  }
+
+  /**
+   * The phone reading a group arrives as a receipt whose reader is our own account.
+   * Unlike 1:1 chats (messages.update), Baileys emits no messages.update for it, so
+   * forward it as the same MESSAGES_UPDATE READ webhook, once per group per batch,
+   * for the newest message of the batch.
+   */
+  private async forwardGroupReadSelf(updates: MessageUserReceiptUpdate[], settings: any): Promise<void> {
+    try {
+      const own = ownAccountJids(this.client?.user);
+      for (const group of collectGroupReadSelf(updates, own, { groupsIgnore: settings?.groupsIgnore })) {
+        const keyId = await pickLatestMessageId(group.ids, async (ids) => {
+          const rows = (await this.prismaRepository.$queryRaw`
+            SELECT "key"->>'id' AS "id", "messageTimestamp" AS "ts" FROM "Message"
+            WHERE "instanceId" = ${this.instanceId}
+            AND "key"->>'remoteJid' = ${group.remoteJid}
+            AND "key"->>'id' = ANY(${ids})
+          `) as { id: string; ts: number | bigint | null }[];
+          return Object.fromEntries(rows.map((row) => [row.id, row.ts === null ? null : Number(row.ts)]));
+        });
+
+        const dedupKey = `${this.instance.id}_${keyId}_READ_SELF`;
+        if (await this.baileysCache.get(dedupKey)) continue;
+        await this.baileysCache.set(dedupKey, true, this.UPDATE_CACHE_TTL_SECONDS);
+
+        this.sendDataWebhook(
+          Events.MESSAGES_UPDATE,
+          buildGroupReadSelfPayload({
+            keyId,
+            remoteJid: group.remoteJid,
+            instanceId: this.instanceId,
+            readTimestamp: group.readTimestamp,
+          }),
+        );
+      }
+    } catch (error) {
+      this.logger.error(`group read-self forward failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

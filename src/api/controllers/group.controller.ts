@@ -5,11 +5,14 @@ import {
   GroupDescriptionDto,
   GroupInvite,
   GroupJid,
+  GroupJoinApprovalModeDto,
+  GroupMemberAddModeDto,
   GroupPictureDto,
   GroupSendInvite,
   GroupSubjectDto,
   GroupToggleEphemeralDto,
   GroupUpdateParticipantDto,
+  GroupUpdateParticipantRequestDto,
   GroupUpdateSettingDto,
 } from '@api/dto/group.dto';
 import { InstanceDto } from '@api/dto/instance.dto';
@@ -76,6 +79,22 @@ export class GroupController {
 
   public async toggleEphemeral(instance: InstanceDto, update: GroupToggleEphemeralDto) {
     return await this.waMonitor.waInstances[instance.instanceName].toggleEphemeral(update);
+  }
+
+  public async updateMemberAddMode(instance: InstanceDto, update: GroupMemberAddModeDto) {
+    return await this.waMonitor.waInstances[instance.instanceName].updateMemberAddMode(update);
+  }
+
+  public async updateJoinApprovalMode(instance: InstanceDto, update: GroupJoinApprovalModeDto) {
+    return await this.waMonitor.waInstances[instance.instanceName].updateJoinApprovalMode(update);
+  }
+
+  public async findParticipantRequests(instance: InstanceDto, groupJid: GroupJid) {
+    return await this.waMonitor.waInstances[instance.instanceName].findParticipantRequests(groupJid);
+  }
+
+  public async updateParticipantRequests(instance: InstanceDto, update: GroupUpdateParticipantRequestDto) {
+    return await this.waMonitor.waInstances[instance.instanceName].updateParticipantRequests(update);
   }
 
   public async leaveGroup(instance: InstanceDto, groupJid: GroupJid) {
