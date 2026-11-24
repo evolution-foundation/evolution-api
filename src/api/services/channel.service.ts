@@ -742,7 +742,7 @@ export class ChannelStartupService {
     const offset = query?.skip ? Prisma.sql`OFFSET ${query.skip}` : Prisma.sql``;
 
     const results = await this.prismaRepository.$queryRaw`
-      WITH rankedMessages AS (
+      WITH msg_chats AS (
         SELECT DISTINCT ON ("Message"."key"->>'remoteJid') 
           "Contact"."id" as "contactId",
           "Message"."key"->>'remoteJid' as "remoteJid",
@@ -755,7 +755,7 @@ export class ChannelStartupService {
             to_timestamp("Message"."messageTimestamp"::double precision), 
             "Contact"."updatedAt"
           ) as "updatedAt",
-          "Chat"."name" as "pushName",
+          "Chat"."name" as "chatName",
           "Chat"."createdAt" as "windowStart",
           "Chat"."createdAt" + INTERVAL '24 hours' as "windowExpires",
           "Chat"."unreadMessages" as "unreadMessages",
@@ -770,7 +770,7 @@ export class ChannelStartupService {
           "Message"."messageType" AS "lastMessageMessageType",
           "Message"."message" AS "lastMessageMessage",
           "Message"."contextInfo" AS "lastMessageContextInfo",
-          "Message"."source" AS "lastMessageSource",
+          "Message"."source"::text AS "lastMessageSource",
           "Message"."messageTimestamp" AS "lastMessageMessageTimestamp",
           "Message"."instanceId" AS "lastMessageInstanceId",
           "Message"."sessionId" AS "lastMessageSessionId",
@@ -782,9 +782,43 @@ export class ChannelStartupService {
         ${remoteJid ? Prisma.sql`AND "Message"."key"->>'remoteJid' = ${remoteJid}` : Prisma.sql``}
         ${timestampFilter}
         ORDER BY "Message"."key"->>'remoteJid', "Message"."messageTimestamp" DESC
+      ),
+      contact_chats AS (
+        SELECT 
+          "Contact"."id" as "contactId",
+          "Contact"."remoteJid" as "remoteJid",
+          "Contact"."pushName" as "pushName",
+          "Contact"."profilePicUrl",
+          "Contact"."updatedAt" as "updatedAt",
+          "Chat"."name" as "chatName",
+          "Chat"."createdAt" as "windowStart",
+          "Chat"."createdAt" + INTERVAL '24 hours' as "windowExpires",
+          COALESCE("Chat"."unreadMessages", 0) as "unreadMessages",
+          CASE WHEN "Chat"."createdAt" + INTERVAL '24 hours' > NOW() THEN true ELSE false END as "windowActive",
+          NULL::text AS "lastMessageId",
+          NULL::jsonb AS "lastMessage_key",
+          NULL::text AS "lastMessagePushName",
+          NULL::text AS "lastMessageParticipant",
+          NULL::text AS "lastMessageMessageType",
+          NULL::jsonb AS "lastMessageMessage",
+          NULL::jsonb AS "lastMessageContextInfo",
+          NULL::text AS "lastMessageSource",
+          NULL::integer AS "lastMessageMessageTimestamp",
+          "Contact"."instanceId" AS "lastMessageInstanceId",
+          NULL::text AS "lastMessageSessionId",
+          NULL::text AS "lastMessageStatus"
+        FROM "Contact"
+        LEFT JOIN "Chat" ON "Chat"."remoteJid" = "Contact"."remoteJid" AND "Chat"."instanceId" = "Contact"."instanceId"
+        WHERE "Contact"."instanceId" = ${this.instanceId}
+        ${remoteJid ? Prisma.sql`AND "Contact"."remoteJid" = ${remoteJid}` : Prisma.sql``}
+      ),
+      combined_chats AS (
+        SELECT * FROM msg_chats
+        UNION ALL
+        SELECT * FROM contact_chats
       )
-      SELECT * FROM rankedMessages 
-      ORDER BY "updatedAt" DESC NULLS LAST
+      SELECT DISTINCT ON ("remoteJid") * FROM combined_chats 
+      ORDER BY "remoteJid", "updatedAt" DESC NULLS LAST
       ${limit}
       ${offset};
     `;
@@ -808,17 +842,22 @@ export class ChannelStartupService {
             }
           : undefined;
 
+        let finalRemoteJid = contact.remoteJid;
+        if (finalRemoteJid && finalRemoteJid.endsWith('@lid')) {
+          finalRemoteJid = finalRemoteJid.replace('@lid', '@s.whatsapp.net');
+        }
+
         return {
           id: contact.contactId || null,
-          remoteJid: contact.remoteJid,
-          pushName: contact.pushName,
+          remoteJid: finalRemoteJid,
+          pushName: contact.pushName || finalRemoteJid?.split('@')[0] || 'Contato',
           profilePicUrl: contact.profilePicUrl,
           updatedAt: contact.updatedAt,
           windowStart: contact.windowStart,
           windowExpires: contact.windowExpires,
           windowActive: contact.windowActive,
           lastMessage: lastMessage ? this.cleanMessageData(lastMessage) : undefined,
-          unreadCount: contact.unreadMessages,
+          unreadCount: contact.unreadMessages || 0,
           isSaved: !!contact.contactId,
         };
       });
