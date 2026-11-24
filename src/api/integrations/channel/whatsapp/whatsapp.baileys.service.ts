@@ -5155,6 +5155,8 @@ export class BaileysStartupService extends ChannelStartupService {
 
   private prepareMessage(message: WAMessage): Message {
     const keyAny = message.key as any;
+    const contentType = getContentType(message.message);
+    const contentMsg = contentType ? (message.message?.[contentType] as any) : undefined;
     const messageRaw: any = {
       key: {
         ...message.key,
@@ -5167,14 +5169,20 @@ export class BaileysStartupService extends ChannelStartupService {
           ? 'Você'
           : message?.participant || (message.key?.participant ? message.key.participant.split('@')[0] : null)),
       message: this.deserializeMessageBuffers({ ...message.message }),
-      messageType: getContentType(message.message),
+      messageType: contentType,
       messageTimestamp: Long.isLong(message.messageTimestamp)
         ? message.messageTimestamp.toNumber()
         : (message.messageTimestamp as number),
       source: getDevice(keyAny.id),
       instanceId: this.instanceId,
       status: status[message.status],
-      contextInfo: this.deserializeMessageBuffers(message.message?.messageContextInfo),
+      // The quote/reply context lives on the content node (e.g.
+      // extendedTextMessage.contextInfo), not on the top-level
+      // messageContextInfo (which only carries device/encryption metadata).
+      // Reading it from the content node keeps stanzaId/participant/quotedMessage
+      // available after the extendedTextMessage node is flattened below — this
+      // is how it worked through v2.3.7 and what downstream reply handling expects.
+      contextInfo: this.deserializeMessageBuffers(contentMsg?.contextInfo ?? message.message?.messageContextInfo),
     };
 
     if (!messageRaw.status && message.key.fromMe === false) {
