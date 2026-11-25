@@ -4336,12 +4336,12 @@ export class BaileysStartupService extends ChannelStartupService {
 
       const msg = m?.message ? m : ((await this.getMessage(m.key, true)) as proto.IWebMessageInfo);
 
-      if (!msg) {
+      if (!msg?.message) {
         throw 'Message not found';
       }
 
       for (const subtype of MessageSubtype) {
-        if (msg.message[subtype]) {
+        if (msg.message[subtype]?.message) {
           msg.message = msg.message[subtype].message;
         }
       }
