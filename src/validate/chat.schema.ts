@@ -319,6 +319,19 @@ export const profileNameSchema: JSONSchema7 = {
   ...isNotEmpty('name'),
 };
 
+export const updateContactSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    number: { type: 'string' },
+    fullName: { type: 'string' },
+    firstName: { type: 'string' },
+    saveOnPrimaryAddressbook: { type: 'boolean' },
+  },
+  required: ['number', 'fullName'],
+  ...isNotEmpty('number', 'fullName'),
+};
+
 export const profileStatusSchema: JSONSchema7 = {
   $id: v4(),
   type: 'object',

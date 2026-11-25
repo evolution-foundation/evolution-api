@@ -13,6 +13,7 @@ import {
   PrivacySettingDto,
   ReadMessageDto,
   SendPresenceDto,
+  UpdateContactDto,
   UpdateMessageDto,
   WhatsAppNumberDto,
 } from '@api/dto/chat.dto';
@@ -118,6 +119,7 @@ import makeWASocket, {
   isJidBroadcast,
   isJidGroup,
   isJidNewsletter,
+  isLidUser,
   isPnUser,
   jidNormalizedUser,
   makeCacheableSignalKeyStore,
@@ -4539,6 +4541,75 @@ export class BaileysStartupService extends ChannelStartupService {
     } catch (error) {
       throw new InternalServerErrorException('Error updating profile name', error.toString());
     }
+  }
+
+  public async updateContact(data: UpdateContactDto) {
+    const jid = createJid(data.number);
+
+    if (isJidGroup(jid) || isJidNewsletter(jid) || isJidBroadcast(jid)) {
+      throw new BadRequestException('Only individual contacts can be updated');
+    }
+
+    let pnJid: string | null = null;
+    let lidJid: string | null = null;
+
+    if (isLidUser(jid)) {
+      lidJid = jid;
+    } else {
+      const onWhatsapp = (await this.whatsappNumber({ numbers: [jid] }))?.shift();
+
+      if (!onWhatsapp?.exists) {
+        throw new BadRequestException(onWhatsapp);
+      }
+
+      if (isLidUser(onWhatsapp.jid)) {
+        lidJid = onWhatsapp.jid;
+      } else {
+        pnJid = onWhatsapp.jid;
+      }
+    }
+
+    const lidMapping = this.client.signalRepository.lidMapping;
+    if (!pnJid) {
+      const pn = await lidMapping.getPNForLID(lidJid);
+      pnJid = pn ? jidNormalizedUser(pn) : isPnUser(jid) ? jid : null;
+    }
+    if (!lidJid) {
+      const lid = await lidMapping.getLIDForPN(pnJid);
+      lidJid = lid ? jidNormalizedUser(lid) : null;
+    }
+
+    if (!pnJid) {
+      throw new BadRequestException(`No phone number is known for ${lidJid}`);
+    }
+
+    // Same shape the phone uses when it syncs a contact: the phone number JID
+    // goes in the patch index and the LID travels inside the action.
+    const contact: proto.SyncActionValue.IContactAction = { fullName: data.fullName };
+    if (data.firstName) contact.firstName = data.firstName;
+    if (lidJid) contact.lidJid = lidJid;
+    if (data.saveOnPrimaryAddressbook !== undefined) {
+      contact.saveOnPrimaryAddressbook = data.saveOnPrimaryAddressbook;
+    }
+
+    try {
+      await this.client.addOrEditContact(pnJid, contact);
+    } catch (error) {
+      throw new InternalServerErrorException('Error updating contact', error.toString());
+    }
+
+    // emitOwnEvents is off, so Baileys will not echo this change back to us.
+    await this.contactHandle['contacts.update']([{ id: pnJid, name: data.fullName }]);
+
+    // Chats that arrived addressed to the LID keep their own contact row.
+    if (lidJid && this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS) {
+      await this.prismaRepository.contact.updateMany({
+        where: { remoteJid: lidJid, instanceId: this.instanceId },
+        data: { pushName: data.fullName },
+      });
+    }
+
+    return { update: 'success', remoteJid: pnJid, lid: lidJid, fullName: data.fullName };
   }
 
   public async updateProfileStatus(status: string) {

@@ -51,6 +51,13 @@ export class ProfileNameDto {
   name: string;
 }
 
+export class UpdateContactDto {
+  number: string;
+  fullName: string;
+  firstName?: string;
+  saveOnPrimaryAddressbook?: boolean;
+}
+
 export class ProfileStatusDto {
   status: string;
 }
