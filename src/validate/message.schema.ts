@@ -71,7 +71,25 @@ export const textMessageSchema: JSONSchema7 = {
   properties: {
     number: { ...numberDefinition },
     text: { type: 'string' },
-    linkPreview: { type: 'boolean' },
+    linkPreview: {
+      description:
+        'true/false to enable/disable the link preview, or an object with the card to show instead of the page',
+      oneOf: [
+        { type: 'boolean' },
+        {
+          type: 'object',
+          properties: {
+            title: { type: 'string', minLength: 1 },
+            description: { type: 'string' },
+            thumbnailUrl: { type: 'string' },
+            thumbnailBase64: { type: 'string' },
+            canonicalUrl: { type: 'string' },
+          },
+          required: ['title'],
+          additionalProperties: false,
+        },
+      ],
+    },
     delay: {
       type: 'integer',
       description: 'Enter a value in milliseconds',
