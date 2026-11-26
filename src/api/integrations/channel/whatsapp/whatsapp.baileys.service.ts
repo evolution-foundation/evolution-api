@@ -48,6 +48,7 @@ import {
   SendLocationDto,
   SendMediaDto,
   SendPollDto,
+  SendProductDto,
   SendPtvDto,
   SendReactionDto,
   SendStatusDto,
@@ -2506,6 +2507,13 @@ export class BaileysStartupService extends ChannelStartupService {
       );
     }
 
+    if (message['product']) {
+      return await this.client.sendMessage(
+        sender,
+        message as unknown as AnyMessageContent,
+        option as unknown as MiscMessageGenerationOptions,
+      );
+    }
     if (!message['audio'] && !message['poll'] && !message['sticker'] && sender != 'status@broadcast') {
       return await this.client.sendMessage(
         sender,
@@ -2959,6 +2967,46 @@ export class BaileysStartupService extends ChannelStartupService {
     );
   }
 
+  public async productMessage(data: SendProductDto, isIntegration = false) {
+    if (!data.productId || data.productId.trim().length === 0) {
+      throw new BadRequestException('productId is required');
+    }
+    if (!data.businessOwnerJid || data.businessOwnerJid.trim().length === 0) {
+      throw new BadRequestException('businessOwnerJid is required');
+    }
+    if (!data.productImage || data.productImage.trim().length === 0) {
+      throw new BadRequestException('productImage is required');
+    }
+
+    const productImage = /^https?:\/\//i.test(data.productImage)
+      ? { url: data.productImage }
+      : Buffer.from(data.productImage, 'base64');
+
+    return await this.sendMessageWithTyping(
+      data.number,
+      {
+        product: {
+          productImage,
+          productId: data.productId,
+          title: data.title ?? '',
+          description: data.description ?? '',
+          currencyCode: data.currencyCode ?? 'USD',
+          priceAmount1000: data.priceAmount1000 != null ? String(data.priceAmount1000) : undefined,
+          retailerId: data.retailerId ?? '',
+          url: data.url ?? '',
+          productImageCount: data.productImageCount ?? 1,
+        },
+        businessOwnerJid: data.businessOwnerJid,
+        caption: data.caption ?? '',
+      },
+      {
+        delay: data?.delay,
+        presence: 'composing',
+        quoted: data?.quoted,
+      },
+      isIntegration,
+    );
+  }
   public async pollMessage(data: SendPollDto) {
     return await this.sendMessageWithTyping(
       data.number,

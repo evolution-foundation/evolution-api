@@ -8,6 +8,7 @@ import {
   SendLocationDto,
   SendMediaDto,
   SendPollDto,
+  SendProductDto,
   SendPtvDto,
   SendReactionDto,
   SendStatusDto,
@@ -104,6 +105,13 @@ export class SendMessageController {
 
   public async sendPoll({ instanceName }: InstanceDto, data: SendPollDto) {
     return await this.waMonitor.waInstances[instanceName].pollMessage(data);
+  }
+
+  public async sendProduct({ instanceName }: InstanceDto, data: SendProductDto) {
+    if (!isURL(data?.productImage) && !isBase64(data?.productImage)) {
+      throw new BadRequestException('productImage must be a URL or base64 string');
+    }
+    return await this.waMonitor.waInstances[instanceName].productMessage(data);
   }
 
   public async sendStatus({ instanceName }: InstanceDto, data: SendStatusDto, file?: any) {
