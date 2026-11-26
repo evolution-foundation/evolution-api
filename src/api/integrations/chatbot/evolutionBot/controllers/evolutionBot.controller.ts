@@ -1,5 +1,6 @@
 import { PrismaRepository } from '@api/repository/repository.service';
 import { WAMonitoringService } from '@api/services/monitor.service';
+import { configService, EvolutionBot as EvolutionBotConfig } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 import { EvolutionBot, IntegrationSession } from '@prisma/client';
 
@@ -23,7 +24,7 @@ export class EvolutionBotController extends BaseChatbotController<EvolutionBot, 
   public readonly logger = new Logger('EvolutionBotController');
   protected readonly integrationName = 'EvolutionBot';
 
-  integrationEnabled = true; // Set to true by default or use config value if available
+  integrationEnabled = configService.get<EvolutionBotConfig>('EVOLUTIONBOT').ENABLED ?? true;
   botRepository: any;
   settingsRepository: any;
   sessionRepository: any;
