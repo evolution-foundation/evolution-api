@@ -4920,14 +4920,14 @@ export class BaileysStartupService extends ChannelStartupService {
         subjectOwner: group.subjectOwner,
         subjectTime: group.subjectTime,
         pictureUrl: picture.profilePictureUrl,
-        size: group.participants.length,
+        size: group.participants?.length ?? 0,
         creation: group.creation,
         owner: group.owner,
         desc: group.desc,
         descId: group.descId,
         restrict: group.restrict,
         announce: group.announce,
-        participants: group.participants,
+        participants: group.participants ?? [],
         isCommunity: group.isCommunity,
         isCommunityAnnounce: group.isCommunityAnnounce,
         linkedParent: group.linkedParent,
@@ -4941,10 +4941,16 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   public async fetchAllGroups(getParticipants: GetParticipant) {
-    const fetch = Object.values(await this?.client?.groupFetchAllParticipating());
+    // groupFetchAllParticipating() can resolve to undefined/null (for example when the Baileys
+    // store is not synced yet right after a reconnection), which made Object.values throw
+    // "Cannot convert undefined or null to object".
+    const allGroups = await this?.client?.groupFetchAllParticipating();
+    const fetch = allGroups ? Object.values(allGroups) : [];
 
     let groups = [];
     for (const group of fetch) {
+      if (!group) continue;
+
       const picture = await this.profilePicture(group.id);
 
       const result = {
@@ -4953,7 +4959,7 @@ export class BaileysStartupService extends ChannelStartupService {
         subjectOwner: group.subjectOwner,
         subjectTime: group.subjectTime,
         pictureUrl: picture?.profilePictureUrl,
-        size: group.participants.length,
+        size: group.participants?.length ?? 0,
         creation: group.creation,
         owner: group.owner,
         desc: group.desc,
@@ -4966,7 +4972,7 @@ export class BaileysStartupService extends ChannelStartupService {
       };
 
       if (getParticipants.getParticipants == 'true') {
-        result['participants'] = group.participants;
+        result['participants'] = group.participants ?? [];
       }
 
       groups = [...groups, result];

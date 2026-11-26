@@ -110,7 +110,9 @@ export abstract class RouterBroker {
     const { request, ClassRef, schema, execute } = args;
 
     const instance = request.params as unknown as InstanceDto;
-    const body = request.body;
+    // A GET without "Content-Type: application/json" arrives with request.body undefined,
+    // because express.json() only populates the body on JSON requests.
+    const body = request.body ?? {};
 
     let groupJid = body?.groupJid;
 
@@ -169,7 +171,8 @@ export abstract class RouterBroker {
     }
 
     const instance = request.params as unknown as InstanceDto;
-    const body = request.body;
+    // A GET without "Content-Type: application/json" arrives with request.body undefined.
+    const body = request.body ?? {};
 
     const ref = new ClassRef();
 
@@ -208,7 +211,8 @@ export abstract class RouterBroker {
     }
 
     const instance = request.params as unknown as InstanceDto;
-    const body = request.body;
+    // A GET without "Content-Type: application/json" arrives with request.body undefined.
+    const body = request.body ?? {};
 
     const ref = new ClassRef();
 
