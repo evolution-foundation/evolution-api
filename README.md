@@ -65,6 +65,7 @@ Evolution API integrates natively with many platforms:
 - **[Socket.io](https://socket.io/)** — real-time WebSocket events
 - **[Dify](https://dify.ai/)** — AI agent workflows
 - **[OpenAI](https://openai.com/)** — AI capabilities including audio-to-text conversion
+- **[MiniMax](https://www.minimaxi.com/)** — chat completion via MiniMax M2.5 / M2.5-highspeed (OpenAI-compatible API)
 - **Amazon S3 / [MinIO](https://min.io/)** — media file storage
 
 ---
