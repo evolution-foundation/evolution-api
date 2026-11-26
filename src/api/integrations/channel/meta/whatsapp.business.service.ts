@@ -1125,7 +1125,9 @@ export class BusinessStartupService extends ChannelStartupService {
           return await this.post(content, 'messages');
         }
         if (message['media']) {
-          const isImage = message['mimetype']?.startsWith('image/');
+          // `mimeTypes.lookup()` returns `false`, not `undefined`, when the URL has no file
+          // extension, and optional chaining only guards `null` and `undefined`.
+          const isImage = typeof message['mimetype'] === 'string' && message['mimetype'].startsWith('image/');
 
           content = {
             messaging_product: 'whatsapp',
