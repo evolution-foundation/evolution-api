@@ -24,8 +24,10 @@ export class BaileysMessageProcessor {
       this.subscription.unsubscribe();
     }
 
-    // Se o Subject foi completado, recriar
-    if (this.messageSubject.closed) {
+    // A completed Subject silently drops every `next()`, but `complete()` only sets
+    // `isStopped` — `closed` stays false (it is set by `unsubscribe()`). Checking `closed`
+    // alone never recreates the Subject, so the instance stays deaf after a logout.
+    if (this.messageSubject.closed || this.messageSubject.isStopped) {
       this.processorLogs.warn('MessageSubject was closed, recreating...');
       this.messageSubject = new Subject<{
         messages: WAMessage[];
