@@ -3531,7 +3531,9 @@ export class BaileysStartupService extends ChannelStartupService {
     // GROUPS
     const groups = await Promise.all(
       jids.groups.map(async ({ jid, number }) => {
-        const group = await this.findGroup({ groupJid: jid }, 'inner');
+        // Reuse the same metadata cache used by the send path. A fresh
+        // groupMetadata request here added a redundant WhatsApp round-trip.
+        const group = await this.getGroupMetadataCache(jid);
 
         if (!group) {
           return new OnWhatsAppDto(jid, false, number);
