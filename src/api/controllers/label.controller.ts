@@ -12,4 +12,8 @@ export class LabelController {
   public async handleLabel({ instanceName }: InstanceDto, data: HandleLabelDto) {
     return await this.waMonitor.waInstances[instanceName].handleLabel(data);
   }
+
+  public async syncLabels({ instanceName }: InstanceDto) {
+    return await this.waMonitor.waInstances[instanceName].syncLabels();
+  }
 }

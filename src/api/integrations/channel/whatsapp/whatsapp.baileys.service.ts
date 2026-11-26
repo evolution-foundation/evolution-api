@@ -1,4 +1,4 @@
-import { getCollectionsDto } from '@api/dto/business.dto';
+﻿import { getCollectionsDto } from '@api/dto/business.dto';
 import { OfferCallDto } from '@api/dto/call.dto';
 import {
   ArchiveChatDto,
@@ -263,6 +263,10 @@ export class BaileysStartupService extends ChannelStartupService {
   private isDeleting = false; // Flag to prevent reconnection during deletion
   private logBaileys = this.configService.get<Log>('LOG').BAILEYS;
   private eventProcessingQueue: Promise<void> = Promise.resolve();
+  private labelAssociationSnapshotCollector?: {
+    observedLabelState: boolean;
+    labelsByChatId: Map<string, Set<string>>;
+  };
   private _lastStream515At = 0;
 
   // Cumulative history sync counters (reset on new sync or completion)
@@ -2046,6 +2050,9 @@ export class BaileysStartupService extends ChannelStartupService {
 
   private readonly labelHandle = {
     [Events.LABELS_EDIT]: async (label: Label) => {
+      if (this.labelAssociationSnapshotCollector) {
+        this.labelAssociationSnapshotCollector.observedLabelState = true;
+      }
       this.sendDataWebhook(Events.LABELS_EDIT, { ...label, instance: this.instance.name });
 
       const labelsRepository = await this.prismaRepository.label.findMany({ where: { instanceId: this.instanceId } });
@@ -2089,6 +2096,8 @@ export class BaileysStartupService extends ChannelStartupService {
         const instanceId = this.instanceId;
         const chatId = data.association.chatId;
         const labelId = data.association.labelId;
+
+        this.collectLabelAssociationSnapshot(data);
 
         if (data.type === 'add') {
           await this.addLabel(labelId, instanceId, chatId);
@@ -2229,13 +2238,13 @@ export class BaileysStartupService extends ChannelStartupService {
 
             if (events[Events.LABELS_ASSOCIATION]) {
               const payload = events[Events.LABELS_ASSOCIATION];
-              this.labelHandle[Events.LABELS_ASSOCIATION](payload, database);
+              await this.labelHandle[Events.LABELS_ASSOCIATION](payload, database);
               return;
             }
 
             if (events[Events.LABELS_EDIT]) {
               const payload = events[Events.LABELS_EDIT];
-              this.labelHandle[Events.LABELS_EDIT](payload);
+              await this.labelHandle[Events.LABELS_EDIT](payload);
               return;
             }
           }
@@ -4748,6 +4757,97 @@ export class BaileysStartupService extends ChannelStartupService {
       id: label.labelId,
       predefinedId: label.predefinedId,
     }));
+  }
+
+  public async syncLabels(): Promise<LabelDto[]> {
+    const collector = {
+      observedLabelState: false,
+      labelsByChatId: new Map<string, Set<string>>(),
+    };
+
+    this.labelAssociationSnapshotCollector = collector;
+    try {
+      await this.instance.authState.state.keys.set({ 'app-state-sync-version': { regular: null } });
+      await this.client.resyncAppState(['regular'], true);
+
+      await this.eventProcessingQueue.catch(() => undefined);
+
+      if (collector.observedLabelState) {
+        await this.replaceChatLabelsFromSnapshot(this.instanceId, collector.labelsByChatId);
+      } else {
+        this.logger.warn(
+          'labels sync snapshot finished without label state mutations; keeping existing chat label projection',
+        );
+      }
+    } finally {
+      this.labelAssociationSnapshotCollector = undefined;
+    }
+
+    // Wait for LABELS_EDIT and LABELS_ASSOCIATION events to be processed
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
+    // Return the now-updated labels from database
+    return this.fetchLabels();
+  }
+
+  private collectLabelAssociationSnapshot(data: { association: LabelAssociation; type: 'remove' | 'add' }) {
+    const collector = this.labelAssociationSnapshotCollector;
+    if (!collector) {
+      return;
+    }
+
+    collector.observedLabelState = true;
+    if (data.association.type !== 'label_jid') {
+      return;
+    }
+
+    const chatId = data.association.chatId;
+    const labelId = data.association.labelId;
+    const labels = collector.labelsByChatId.get(chatId) ?? new Set<string>();
+
+    if (data.type === 'add') {
+      labels.add(labelId);
+    } else {
+      labels.delete(labelId);
+    }
+
+    if (labels.size) {
+      collector.labelsByChatId.set(chatId, labels);
+    } else {
+      collector.labelsByChatId.delete(chatId);
+    }
+  }
+
+  private async replaceChatLabelsFromSnapshot(instanceId: string, labelsByChatId: Map<string, Set<string>>) {
+    await this.prismaRepository.$transaction(async (transaction) => {
+      await transaction.chat.updateMany({
+        where: { instanceId },
+        data: { labels: [] },
+      });
+
+      for (const [chatId, labelSet] of labelsByChatId) {
+        const labels = [...labelSet].sort();
+        if (!labels.length) {
+          continue;
+        }
+
+        await transaction.chat.upsert({
+          where: {
+            instanceId_remoteJid: {
+              instanceId,
+              remoteJid: chatId,
+            },
+          },
+          update: { labels },
+          create: {
+            id: cuid(),
+            instanceId,
+            remoteJid: chatId,
+            labels,
+          },
+        });
+      }
+    });
   }
 
   public async handleLabel(data: HandleLabelDto) {
