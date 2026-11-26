@@ -897,8 +897,16 @@ export class BaileysStartupService extends ChannelStartupService {
         }
       >[],
     ) => {
+      // Forward the state that changed (archived, pinned, unread count) along with the id, so webhook
+      // consumers learn when a chat is archived, pinned or read from the phone.
       const chatsRaw = chats.map((chat) => {
-        return { remoteJid: chat.id, instanceId: this.instanceId };
+        return {
+          remoteJid: chat.id,
+          instanceId: this.instanceId,
+          ...(typeof chat.archived === 'boolean' ? { archived: chat.archived } : {}),
+          ...(chat.pinned !== undefined && chat.pinned !== null ? { pinned: Number(chat.pinned) } : {}),
+          ...(typeof chat.unreadCount === 'number' ? { unreadCount: chat.unreadCount } : {}),
+        };
       });
 
       this.sendDataWebhook(Events.CHATS_UPDATE, chatsRaw);
