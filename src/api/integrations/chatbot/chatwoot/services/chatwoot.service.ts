@@ -441,45 +441,40 @@ export class ChatwootService {
       return null;
     }
 
-    // Direct search by query (q) - most common way to search by identifier/email/phone
-    const contact = (await (client as any).get('contacts/search', {
-      params: {
-        q: identifier,
-        sort: 'name',
+    // ChatwootClient exposes resource namespaces, not generic get()/post().
+    // Search is a substring match across several fields, so only an exact
+    // identifier match is accepted.
+    const search = (await client.contacts.search({
+      accountId: this.provider.accountId,
+      q: identifier,
+    })) as any;
+
+    const searched = (search?.payload ?? search?.data?.payload ?? []).find(
+      (contact: any) => contact.identifier === identifier,
+    );
+
+    if (searched) {
+      return searched;
+    }
+
+    const filter = (await chatwootRequest(this.getClientCwConfig(), {
+      method: 'POST',
+      url: `/api/v1/accounts/${this.provider.accountId}/contacts/filter`,
+      body: {
+        payload: [
+          {
+            attribute_key: 'identifier',
+            filter_operator: 'equal_to',
+            values: [identifier],
+            query_operator: null,
+          },
+        ],
       },
     })) as any;
 
-    if (contact && contact.data && contact.data.payload && contact.data.payload.length > 0) {
-      return contact.data.payload[0];
-    }
-
-    // Fallback for older API versions or different response structures
-    if (contact && contact.payload && contact.payload.length > 0) {
-      return contact.payload[0];
-    }
-
-    // Try search by attribute
-    const contactByAttr = (await (client as any).post('contacts/filter', {
-      payload: [
-        {
-          attribute_key: 'identifier',
-          filter_operator: 'equal_to',
-          values: [identifier],
-          query_operator: null,
-        },
-      ],
-    })) as any;
-
-    if (contactByAttr && contactByAttr.payload && contactByAttr.payload.length > 0) {
-      return contactByAttr.payload[0];
-    }
-
-    // Check inside data property if using axios interceptors wrapper
-    if (contactByAttr && contactByAttr.data && contactByAttr.data.payload && contactByAttr.data.payload.length > 0) {
-      return contactByAttr.data.payload[0];
-    }
-
-    return null;
+    return (
+      (filter?.payload ?? filter?.data?.payload ?? []).find((contact: any) => contact.identifier === identifier) ?? null
+    );
   }
 
   public async findContact(instance: InstanceDto, phoneNumber: string) {
@@ -2784,9 +2779,14 @@ export class ChatwootService {
       const lidIdentifier = this.normalizeJidIdentifier(remoteJid);
       const contact = await this.findContactByIdentifier(instance, lidIdentifier);
 
-      if (contact && contact.phone_number) {
+      // Contacts created from a LID carry the LID digits as phone_number.
+      // That is not a WhatsApp number and must not be used as one.
+      const lidDigits = remoteJid.split('@')[0].split(':')[0];
+      const phoneDigits = contact?.phone_number?.replace(/\D/g, '');
+
+      if (phoneDigits && phoneDigits !== lidDigits) {
         // Converte +554498860240 → 554498860240@s.whatsapp.net
-        const phoneNumber = contact.phone_number.replace('+', '') + '@s.whatsapp.net';
+        const phoneNumber = phoneDigits + '@s.whatsapp.net';
         this.saveLidMapping(remoteJid, phoneNumber);
         this.logger.verbose(`LID resolved from database: ${remoteJid} → ${phoneNumber}`);
         return phoneNumber;
