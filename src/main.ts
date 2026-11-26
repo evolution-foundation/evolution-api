@@ -77,8 +77,7 @@ async function bootstrap() {
     json({
       limit: '136mb',
       verify: (req: any, _res, buf) => {
-        // Captura o RAW body para validação de HMAC (webhook EvoHub X-Hub-Signature-256).
-        // express.json() re-serializa o body; o HMAC do hub assina os bytes crus.
+        // Preserve the original bytes for Meta and EvoHub X-Hub-Signature-256 validation.
         req.rawBody = buf;
       },
     }),

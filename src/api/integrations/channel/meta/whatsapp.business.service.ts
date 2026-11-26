@@ -126,17 +126,31 @@ export class BusinessStartupService extends ChannelStartupService {
   public async connectToWhatsapp(data?: any): Promise<any> {
     if (!data) return;
 
-    const content = data.entry[0].changes[0].value;
-    const normalizedContent = this.normalizeWebhookContent(content);
-    const remoteId = this.resolveRemoteId(normalizedContent);
-
     try {
-      this.loadChatwoot();
+      await this.loadChatwoot();
 
-      await this.eventHandler(normalizedContent);
+      for (const entry of data.entry ?? []) {
+        for (const change of entry.changes ?? []) {
+          const content = change.value;
+          if (!content) continue;
 
-      if (remoteId) {
-        this.phoneNumber = createJid(remoteId);
+          const messages = Array.isArray(content.messages) ? content.messages : [];
+          // Meta uses the smb_message_echoes webhook field with a message_echoes array in its value.
+          const echoes =
+            [content.message_echoes, content.smb_message_echoes].find(
+              (value) => Array.isArray(value) && value.length > 0,
+            ) ?? [];
+
+          if (messages.length) {
+            await this.eventHandler({ ...content, messages, statuses: undefined, isEcho: false });
+          }
+          if (Array.isArray(echoes) && echoes.length) {
+            await this.eventHandler({ ...content, messages: echoes, statuses: undefined, isEcho: true });
+          }
+          if (Array.isArray(content.statuses) && content.statuses.length) {
+            await this.eventHandler({ ...content, messages: undefined });
+          }
+        }
       }
     } catch (error) {
       this.logger.error(error);
@@ -144,70 +158,21 @@ export class BusinessStartupService extends ChannelStartupService {
     }
   }
 
-  private normalizeWebhookContent(content: any) {
-    if (!content || typeof content !== 'object') return content;
-
-    const normalized = { ...content };
-    const messageEchoes = Array.isArray(normalized?.message_echoes) ? normalized.message_echoes : undefined;
-    const smbMessageEchoes = Array.isArray(normalized?.smb_message_echoes) ? normalized.smb_message_echoes : undefined;
-    const echoes = messageEchoes?.length ? messageEchoes : smbMessageEchoes?.length ? smbMessageEchoes : undefined;
-
-    if (!Array.isArray(normalized.messages) && Array.isArray(echoes) && echoes.length > 0) {
-      normalized.messages = echoes;
-    }
-
-    return normalized;
-  }
-
   private normalizePhoneNumber(value?: string) {
     return typeof value === 'string' ? value.replace(/\D/g, '') : '';
   }
 
-  private resolveRemoteId(content: any) {
-    const firstMessage = content?.messages?.[0];
-    const recipient = content?.statuses?.[0]?.recipient_id;
-
-    const candidates = [firstMessage?.from, firstMessage?.to, recipient].filter(Boolean) as string[];
-    if (candidates.length === 0) return undefined;
-
-    const businessNumbers = [
-      this.normalizePhoneNumber(content?.metadata?.display_phone_number),
-      this.normalizePhoneNumber(content?.metadata?.phone_number_id),
-    ].filter(Boolean);
-
-    const externalCounterpart = candidates.find((candidate) => {
-      const normalizedCandidate = this.normalizePhoneNumber(candidate);
-      return normalizedCandidate && !businessNumbers.includes(normalizedCandidate);
-    });
-
-    return externalCounterpart ?? candidates[0];
-  }
-
-  private isCloudApiEchoPayload(received: any) {
-    return (
-      (Array.isArray(received?.message_echoes) && received.message_echoes.length > 0) ||
-      (Array.isArray(received?.smb_message_echoes) && received.smb_message_echoes.length > 0)
-    );
-  }
-
   private resolveMessageRemoteId(message: any, received: any) {
-    if (this.isCloudApiEchoPayload(received)) {
-      return message?.to ?? message?.from;
-    }
-
-    return message?.from ?? message?.to;
+    return this.isCloudApiFromMe(message, received) ? message?.to : message?.from;
   }
 
   private isCloudApiFromMe(message: any, received: any) {
-    if (this.isCloudApiEchoPayload(received)) return true;
+    if (received.isEcho) return true;
 
     const from = this.normalizePhoneNumber(message?.from);
     const displayPhone = this.normalizePhoneNumber(received?.metadata?.display_phone_number);
     const phoneNumberId = this.normalizePhoneNumber(received?.metadata?.phone_number_id);
-
-    if (!from) return false;
-
-    return from === displayPhone || from === phoneNumberId;
+    return !!from && (from === displayPhone || from === phoneNumberId);
   }
 
   private isCloudApiStatusFromMe(item: any, received: any) {
@@ -484,11 +449,7 @@ export class BusinessStartupService extends ChannelStartupService {
     try {
       let messageRaw: any;
       let pushName: any;
-      const incomingContact = received?.contacts?.[0];
-
-      if (incomingContact) {
-        pushName = incomingContact?.profile?.name ?? incomingContact?.name ?? incomingContact?.wa_id ?? undefined;
-      }
+      let persistedMedia = false;
 
       if (received.messages) {
         const message = received.messages[0];
@@ -496,6 +457,14 @@ export class BusinessStartupService extends ChannelStartupService {
         if (!remoteId) return;
 
         const remoteJid = createJid(remoteId);
+        const incomingContact = Array.isArray(received.contacts)
+          ? received.contacts.find((item: any) => typeof item.wa_id === 'string' && createJid(item.wa_id) === remoteJid)
+          : undefined;
+
+        if (incomingContact) {
+          pushName = incomingContact.profile?.name ?? incomingContact.name ?? incomingContact.wa_id ?? undefined;
+        }
+
         const contact = await this.prismaRepository.contact.findFirst({
           where: { instanceId: this.instanceId, remoteJid },
         });
@@ -605,6 +574,7 @@ export class BusinessStartupService extends ChannelStartupService {
                 const createdMessage = await this.prismaRepository.message.create({
                   data: messageRaw,
                 });
+                persistedMedia = true;
 
                 await this.prismaRepository.media.create({
                   data: {
@@ -786,7 +756,7 @@ export class BusinessStartupService extends ChannelStartupService {
           }
         }
 
-        this.sendDataWebhook(Events.MESSAGES_UPSERT, messageRaw);
+        await this.sendDataWebhook(Events.MESSAGES_UPSERT, messageRaw);
 
         await chatbotController.emit({
           instance: { instanceName: this.instance.name, instanceId: this.instanceId },
@@ -795,17 +765,14 @@ export class BusinessStartupService extends ChannelStartupService {
           pushName: messageRaw.pushName,
         });
 
-        if (!this.isMediaMessage(message) && message.type !== 'sticker') {
+        if (!persistedMedia) {
           await this.prismaRepository.message.create({
             data: messageRaw,
           });
         }
 
-        const contactPhone = incomingContact?.profile?.phone ?? incomingContact?.wa_id ?? remoteId;
-        if (!contactPhone) return;
-
         const contactRaw: any = {
-          remoteJid: createJid(contactPhone),
+          remoteJid,
           pushName,
           // profilePicUrl: '',
           instanceId: this.instanceId,
@@ -816,14 +783,7 @@ export class BusinessStartupService extends ChannelStartupService {
         }
 
         if (contact) {
-          const contactRaw: any = {
-            remoteJid: createJid(contactPhone),
-            pushName,
-            // profilePicUrl: '',
-            instanceId: this.instanceId,
-          };
-
-          this.sendDataWebhook(Events.CONTACTS_UPDATE, contactRaw);
+          await this.sendDataWebhook(Events.CONTACTS_UPDATE, contactRaw);
 
           if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
             await this.chatwootService.eventWhatsapp(
@@ -834,21 +794,21 @@ export class BusinessStartupService extends ChannelStartupService {
           }
 
           await this.prismaRepository.contact.updateMany({
-            where: { remoteJid: contact.remoteJid },
+            where: { instanceId: this.instanceId, remoteJid: contact.remoteJid },
             data: contactRaw,
           });
           return;
         }
 
-        this.sendDataWebhook(Events.CONTACTS_UPSERT, contactRaw);
+        await this.sendDataWebhook(Events.CONTACTS_UPSERT, contactRaw);
 
-        this.prismaRepository.contact.create({
+        await this.prismaRepository.contact.create({
           data: contactRaw,
         });
       }
       if (received.statuses) {
         for await (const item of received.statuses) {
-          const remoteId = item?.recipient_id ?? this.phoneNumber;
+          const remoteId = item?.recipient_id;
           if (!remoteId) continue;
 
           const key: any = {
@@ -857,7 +817,7 @@ export class BusinessStartupService extends ChannelStartupService {
             fromMe: this.isCloudApiStatusFromMe(item, received),
           };
           if (settings?.groups_ignore && key.remoteJid.includes('@g.us')) {
-            return;
+            continue;
           }
           if (key.remoteJid !== 'status@broadcast' && !key?.remoteJid?.match(/(:\d+)/)) {
             const findMessage = await this.prismaRepository.message.findFirst({
@@ -871,7 +831,7 @@ export class BusinessStartupService extends ChannelStartupService {
             });
 
             if (!findMessage) {
-              return;
+              continue;
             }
 
             const findMessageKey: any = findMessage?.key ?? {};
@@ -883,7 +843,7 @@ export class BusinessStartupService extends ChannelStartupService {
             }
 
             if (item.message === null && item.status === undefined) {
-              this.sendDataWebhook(Events.MESSAGES_DELETE, key);
+              await this.sendDataWebhook(Events.MESSAGES_DELETE, key);
 
               const message: any = {
                 messageId: findMessage.id,
@@ -900,14 +860,14 @@ export class BusinessStartupService extends ChannelStartupService {
               });
 
               if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
-                this.chatwootService.eventWhatsapp(
+                await this.chatwootService.eventWhatsapp(
                   Events.MESSAGES_DELETE,
                   { instanceName: this.instance.name, instanceId: this.instanceId },
                   { key: key },
                 );
               }
 
-              return;
+              continue;
             }
 
             const message: any = {
@@ -920,7 +880,7 @@ export class BusinessStartupService extends ChannelStartupService {
               instanceId: this.instanceId,
             };
 
-            this.sendDataWebhook(Events.MESSAGES_UPDATE, message);
+            await this.sendDataWebhook(Events.MESSAGES_UPDATE, message);
 
             await this.prismaRepository.messageUpdate.create({
               data: message,
@@ -934,6 +894,7 @@ export class BusinessStartupService extends ChannelStartupService {
       }
     } catch (error) {
       this.logger.error(error);
+      throw error;
     }
   }
 
@@ -1015,8 +976,7 @@ export class BusinessStartupService extends ChannelStartupService {
       const database = this.configService.get<Database>('DATABASE');
       const settings = await this.findSettings();
 
-      if (content.messages && content.messages.length > 0) {
-        const message = content.messages[0];
+      for (const message of content.messages ?? []) {
         this.logger.log(`Tipo de mensaje recibido: ${message.type}`);
 
         if (
@@ -1032,18 +992,18 @@ export class BusinessStartupService extends ChannelStartupService {
           message.type === 'button' ||
           message.type === 'reaction'
         ) {
-          await this.messageHandle(content, database, settings);
+          await this.messageHandle({ ...content, messages: [message], statuses: undefined }, database, settings);
         } else {
           this.logger.warn(`Tipo de mensaje no reconocido: ${message.type}`);
         }
-      } else if (content.statuses) {
-        await this.messageHandle(content, database, settings);
-      } else {
-        this.logger.warn('No se encontraron mensajes ni estados en el contenido recibido');
+      }
+      if (content.statuses?.length) {
+        await this.messageHandle({ ...content, messages: undefined }, database, settings);
       }
     } catch (error) {
       this.logger.error('Error en eventHandler:');
       this.logger.error(error);
+      throw error;
     }
   }
 

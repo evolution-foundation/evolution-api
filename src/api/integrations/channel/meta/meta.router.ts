@@ -1,4 +1,5 @@
 import { RouterBroker } from '@api/abstract/abstract.router';
+import { metaWebhookGuard } from '@api/guards/meta-webhook.guard';
 import { metaController } from '@api/server.module';
 import { ConfigService, WaBusiness } from '@config/env.config';
 import { Router } from 'express';
@@ -12,7 +13,7 @@ export class MetaRouter extends RouterBroker {
           res.send(req.query['hub.challenge']);
         else res.send('Error, wrong validation token');
       })
-      .post(this.routerPath('webhook/meta', false), async (req, res) => {
+      .post(this.routerPath('webhook/meta', false), metaWebhookGuard(configService), async (req, res) => {
         const { body } = req;
         const response = await metaController.receiveWebhook(body);
 

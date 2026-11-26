@@ -1,6 +1,7 @@
 import { MetaController } from '@api/integrations/channel/meta/meta.controller';
 import { PrismaRepository } from '@api/repository/repository.service';
 import { WAMonitoringService } from '@api/services/monitor.service';
+import { Integration } from '@api/types/wa.types';
 import { ConfigService, EvolutionHub } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 import * as crypto from 'crypto';
@@ -17,6 +18,7 @@ import * as crypto from 'crypto';
  */
 export class EvoHubController extends MetaController {
   private readonly hubLogger = new Logger('EvoHubController');
+  protected readonly channelIntegration: string = Integration.EVOHUB;
 
   constructor(
     prismaRepository: PrismaRepository,

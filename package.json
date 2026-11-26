@@ -21,7 +21,8 @@
     "db:migrate:dev": "node runWithProvider.js \"rm -rf ./prisma/migrations && cp -r ./prisma/DATABASE_PROVIDER-migrations ./prisma/migrations && npx prisma migrate dev --schema ./prisma/DATABASE_PROVIDER-schema.prisma && cp -r ./prisma/migrations/* ./prisma/DATABASE_PROVIDER-migrations\"",
     "db:migrate:dev:win": "node runWithProvider.js \"xcopy /E /I prisma\\DATABASE_PROVIDER-migrations prisma\\migrations && npx prisma migrate dev --schema prisma\\DATABASE_PROVIDER-schema.prisma\"",
     "postinstall": "patch-package",
-    "prepare": "husky"
+    "prepare": "husky",
+    "test:coexistence": "tsx --test ./test/meta-coexistence.test.ts"
   },
   "repository": {
     "type": "git",
@@ -147,6 +148,7 @@
     "@types/qrcode-terminal": "^0.12.2",
     "commitizen": "^4.3.1",
     "cz-conventional-changelog": "^3.3.0",
+    "esbuild": "0.27.7",
     "eslint": "^10.4.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import-x": "^4.16.2",
