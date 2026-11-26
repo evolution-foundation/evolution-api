@@ -251,10 +251,17 @@ export class BaileysStartupService extends ChannelStartupService {
   private endSession = false;
   private logBaileys = this.configService.get<Log>('LOG').BAILEYS;
   private eventProcessingQueue: Promise<void> = Promise.resolve();
+  private groupMetadataRateLimitUntil = 0;
+  private reconnectAttempts = 0;
 
   // Cache TTL constants (in seconds)
   private readonly MESSAGE_CACHE_TTL_SECONDS = 5 * 60; // 5 minutes - avoid duplicate message processing
   private readonly UPDATE_CACHE_TTL_SECONDS = 30 * 60; // 30 minutes - avoid duplicate status updates
+  private readonly HISTORY_GAP_SECONDS = 10 * 60; // 10 minutes - request recent history when a chat jumps ahead
+  private readonly HISTORY_GAP_SYNC_TTL_SECONDS = 15 * 60; // 15 minutes - avoid Baileys/WhatsApp rate limits
+  private readonly HISTORY_GAP_GLOBAL_TTL_SECONDS = 10; // Pace cross-chat history requests
+  private readonly HISTORY_GAP_SYNC_MESSAGE_COUNT = 50;
+  private readonly MAX_RECONNECT_DELAY_MS = 30_000;
 
   public stateConnection: wa.StateConnection = { state: 'close' };
 
@@ -428,6 +435,15 @@ export class BaileysStartupService extends ChannelStartupService {
       const codesToNotReconnect = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 402, 406];
       const shouldReconnect = !codesToNotReconnect.includes(statusCode);
       if (shouldReconnect) {
+        this.reconnectAttempts += 1;
+        const reconnectDelayMs = Math.min(
+          1000 * 2 ** Math.min(this.reconnectAttempts - 1, 5),
+          this.MAX_RECONNECT_DELAY_MS,
+        );
+        this.logger.warn(
+          `WhatsApp connection closed for ${this.instance.name}. Reconnecting in ${reconnectDelayMs}ms. Reason: ${statusCode}`,
+        );
+        await delay(reconnectDelayMs);
         await this.connectToWhatsapp(this.phoneNumber);
       } else {
         this.sendDataWebhook(Events.STATUS_INSTANCE, {
@@ -465,6 +481,7 @@ export class BaileysStartupService extends ChannelStartupService {
     }
 
     if (connection === 'open') {
+      this.reconnectAttempts = 0;
       this.instance.wuid = this.client.user.id.replace(/:\d+/, '');
       try {
         const profilePic = await this.profilePicture(this.instance.wuid);
@@ -789,8 +806,8 @@ export class BaileysStartupService extends ChannelStartupService {
 
       for (const chat of chats) {
         await this.prismaRepository.chat.updateMany({
-          where: { instanceId: this.instanceId, remoteJid: chat.id, name: chat.name },
-          data: { remoteJid: chat.id },
+          where: { instanceId: this.instanceId, remoteJid: chat.id },
+          data: { remoteJid: chat.id, name: chat.name },
         });
       }
     },
@@ -808,12 +825,19 @@ export class BaileysStartupService extends ChannelStartupService {
   private readonly contactHandle = {
     'contacts.upsert': async (contacts: Contact[]) => {
       try {
-        const contactsRaw: any = contacts.map((contact) => ({
-          remoteJid: contact.id,
-          pushName: contact?.name || contact?.verifiedName || contact.id.split('@')[0],
-          profilePicUrl: null,
-          instanceId: this.instanceId,
-        }));
+        const contactsRaw: any = await Promise.all(
+          contacts.map(async (contact) => {
+            const candidateName = contact?.name || contact?.verifiedName || contact.id.split('@')[0];
+            return {
+              remoteJid: contact.id,
+              pushName: contact.id?.includes('@g.us')
+                ? await this.resolveGroupContactName(contact.id, candidateName)
+                : candidateName,
+              profilePicUrl: null,
+              instanceId: this.instanceId,
+            };
+          }),
+        );
 
         if (contactsRaw.length > 0) {
           this.sendDataWebhook(Events.CONTACTS_UPSERT, contactsRaw);
@@ -844,12 +868,17 @@ export class BaileysStartupService extends ChannelStartupService {
         }
 
         const updatedContacts = await Promise.all(
-          contacts.map(async (contact) => ({
-            remoteJid: contact.id,
-            pushName: contact?.name || contact?.verifiedName || contact.id.split('@')[0],
-            profilePicUrl: (await this.profilePicture(contact.id)).profilePictureUrl,
-            instanceId: this.instanceId,
-          })),
+          contacts.map(async (contact) => {
+            const candidateName = contact?.name || contact?.verifiedName || contact.id.split('@')[0];
+            return {
+              remoteJid: contact.id,
+              pushName: contact.id?.includes('@g.us')
+                ? await this.resolveGroupContactName(contact.id, candidateName)
+                : candidateName,
+              profilePicUrl: (await this.profilePicture(contact.id)).profilePictureUrl,
+              instanceId: this.instanceId,
+            };
+          }),
         );
 
         if (updatedContacts.length > 0) {
@@ -880,10 +909,17 @@ export class BaileysStartupService extends ChannelStartupService {
                   return;
                 }
 
-                this.chatwootService.updateContact(instance, findParticipant.id, {
-                  name: contact.pushName,
+                const updatePayload: { name?: string; avatar_url?: string } = {
                   avatar_url: contact.profilePicUrl,
-                });
+                };
+                if (
+                  !contact.remoteJid.includes('@g.us') ||
+                  this.isUsableGroupName(contact.remoteJid, contact.pushName)
+                ) {
+                  updatePayload.name = contact.pushName;
+                }
+
+                this.chatwootService.updateContact(instance, findParticipant.id, updatePayload);
               }
             }),
           );
@@ -898,9 +934,12 @@ export class BaileysStartupService extends ChannelStartupService {
       const contactsRaw: { remoteJid: string; pushName?: string; profilePicUrl?: string; instanceId: string }[] = [];
       for await (const contact of contacts) {
         this.logger.debug(`Updating contact: ${JSON.stringify(contact, null, 2)}`);
+        const candidateName = contact?.name ?? contact?.verifiedName;
         contactsRaw.push({
           remoteJid: contact.id,
-          pushName: contact?.name ?? contact?.verifiedName,
+          pushName: contact.id?.includes('@g.us')
+            ? await this.resolveGroupContactName(contact.id, candidateName)
+            : candidateName,
           profilePicUrl: (await this.profilePicture(contact.id)).profilePictureUrl,
           instanceId: this.instanceId,
         });
@@ -1063,7 +1102,7 @@ export class BaileysStartupService extends ChannelStartupService {
         ) {
           this.chatwootService.addHistoryMessages(
             instance,
-            messagesRaw.filter((msg) => !chatwootImport.isIgnorePhoneNumber(msg.key?.remoteJid)),
+            messagesRaw.filter((msg) => !chatwootImport.isIgnoredRemoteJid(msg.key?.remoteJid)),
           );
         }
 
@@ -1174,6 +1213,8 @@ export class BaileysStartupService extends ChannelStartupService {
           if (settings?.groupsIgnore && received.key.remoteJid.includes('@g.us')) {
             continue;
           }
+
+          await this.requestRecentHistoryOnGap(received);
 
           const existingChat = await this.prismaRepository.chat.findFirst({
             where: { instanceId: this.instanceId, remoteJid: received.key.remoteJid },
@@ -1314,6 +1355,13 @@ export class BaileysStartupService extends ChannelStartupService {
             received?.message?.audioMessage;
 
           const isVideo = received?.message?.videoMessage;
+          const storedMessage = await this.findStoredMessageByKeyId(received.key.id);
+          const shouldSendToChatwoot = !storedMessage?.chatwootMessageId;
+
+          if (storedMessage?.chatwootMessageId) {
+            this.logger.info(`Message duplicated ignored before integrations: ${received.key.id}`);
+            continue;
+          }
 
           if (this.localSettings.readMessages && received.key.id !== 'status@broadcast') {
             await this.client.readMessages([received.key]);
@@ -1326,7 +1374,8 @@ export class BaileysStartupService extends ChannelStartupService {
           if (
             this.configService.get<Chatwoot>('CHATWOOT').ENABLED &&
             this.localChatwoot?.enabled &&
-            !received.key.id.includes('@broadcast')
+            !received.key.id.includes('@broadcast') &&
+            shouldSendToChatwoot
           ) {
             const chatwootSentMessage = await this.chatwootService.eventWhatsapp(
               Events.MESSAGES_UPSERT,
@@ -1355,7 +1404,27 @@ export class BaileysStartupService extends ChannelStartupService {
           if (this.configService.get<Database>('DATABASE').SAVE_DATA.NEW_MESSAGE) {
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const { pollUpdates, ...messageData } = messageRaw;
-            const msg = await this.prismaRepository.message.create({ data: messageData });
+            const msg =
+              storedMessage ??
+              (await this.prismaRepository.message.create({
+                data: messageData,
+              }));
+
+            if (storedMessage) {
+              const chatwootFields = {
+                chatwootMessageId: messageRaw.chatwootMessageId,
+                chatwootInboxId: messageRaw.chatwootInboxId,
+                chatwootConversationId: messageRaw.chatwootConversationId,
+              };
+              const hasChatwootUpdate = Object.values(chatwootFields).some((value) => value != null);
+              if (hasChatwootUpdate) {
+                await this.prismaRepository.message.update({
+                  where: { id: storedMessage.id },
+                  data: chatwootFields,
+                });
+              }
+              this.logger.info(`Message duplicated ignored in database insert: ${received.key.id}`);
+            }
 
             const { remoteJid } = received.key;
             const timestamp = msg.messageTimestamp;
@@ -1384,7 +1453,7 @@ export class BaileysStartupService extends ChannelStartupService {
               this.logger.info(`Update readed messages duplicated ignored [avoid deadlock]: ${messageKey}`);
             }
 
-            if (isMedia) {
+            if (isMedia && !storedMessage) {
               if (this.configService.get<S3>('S3').ENABLE) {
                 try {
                   if (isVideo && !this.configService.get<S3>('S3').SAVE_VIDEO) {
@@ -1441,6 +1510,10 @@ export class BaileysStartupService extends ChannelStartupService {
             }
           }
 
+          if (storedMessage) {
+            continue;
+          }
+
           if (this.localWebhook.enabled) {
             if (isMedia && this.localWebhook.webhookBase64) {
               try {
@@ -1495,12 +1568,18 @@ export class BaileysStartupService extends ChannelStartupService {
 
           const contactRaw: {
             remoteJid: string;
-            pushName: string;
+            pushName?: string;
             profilePicUrl?: string;
             instanceId: string;
           } = {
             remoteJid: received.key.remoteJid,
-            pushName: received.key.fromMe ? '' : received.key.fromMe == null ? '' : received.pushName,
+            pushName: received.key.remoteJid?.includes('@g.us')
+              ? await this.resolveGroupContactName(received.key.remoteJid, undefined)
+              : received.key.fromMe
+                ? ''
+                : received.key.fromMe == null
+                  ? ''
+                  : received.pushName,
             profilePicUrl: (await this.profilePicture(received.key.remoteJid)).profilePictureUrl,
             instanceId: this.instanceId,
           };
@@ -4285,6 +4364,11 @@ export class BaileysStartupService extends ChannelStartupService {
 
   // Group
   private async updateGroupMetadataCache(groupJid: string) {
+    if (Date.now() < this.groupMetadataRateLimitUntil) {
+      this.logger.warn(`Skipping group metadata refresh while WhatsApp rate limit is active: ${groupJid}`);
+      return null;
+    }
+
     try {
       const meta = await this.client.groupMetadata(groupJid);
 
@@ -4297,7 +4381,15 @@ export class BaileysStartupService extends ChannelStartupService {
 
       return meta;
     } catch (error) {
-      this.logger.error(error);
+      const isRateLimit =
+        error?.data === 429 || error?.message === 'rate-overlimit' || error?.toString?.()?.includes?.('rate-overlimit');
+
+      if (isRateLimit) {
+        this.groupMetadataRateLimitUntil = Date.now() + 5 * 60 * 1000;
+        this.logger.warn(`WhatsApp group metadata rate limit reached; pausing group metadata refresh for 5 minutes.`);
+      } else {
+        this.logger.error(error);
+      }
       return null;
     }
   }
@@ -4647,6 +4739,145 @@ export class BaileysStartupService extends ChannelStartupService {
     }
 
     return obj;
+  }
+
+  private getMessageTimestampAsNumber(message: proto.IWebMessageInfo): number | null {
+    const timestamp = message?.messageTimestamp;
+
+    if (Long.isLong(timestamp)) {
+      return Math.floor(timestamp.toNumber());
+    }
+
+    if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
+      return Math.floor(timestamp);
+    }
+
+    if (typeof timestamp === 'string') {
+      const parsed = Number(timestamp);
+      return Number.isFinite(parsed) ? Math.floor(parsed) : null;
+    }
+
+    return null;
+  }
+
+  private async findStoredMessageByKeyId(keyId?: string): Promise<Message | null> {
+    if (!keyId) {
+      return null;
+    }
+
+    const rows = (await this.prismaRepository.$queryRaw`
+      SELECT * FROM "Message"
+      WHERE "instanceId" = ${this.instanceId}
+      AND "key"->>'id' = ${keyId}
+      LIMIT 1
+    `) as Message[];
+
+    return rows[0] ?? null;
+  }
+
+  private async requestRecentHistoryOnGap(message: WAMessage): Promise<void> {
+    const remoteJid = message?.key?.remoteJid;
+    const timestamp = this.getMessageTimestampAsNumber(message);
+
+    if (
+      !this.client ||
+      !remoteJid ||
+      !message?.key?.id ||
+      !timestamp ||
+      remoteJid === 'status@broadcast' ||
+      isJidBroadcast(remoteJid) ||
+      isJidNewsletter(remoteJid)
+    ) {
+      return;
+    }
+
+    const cacheKey = `history_gap_sync:${this.instanceId}:${remoteJid}`;
+    const syncRequested = await this.baileysCache.get(cacheKey);
+    if (syncRequested) {
+      return;
+    }
+
+    const globalCacheKey = `history_gap_sync:${this.instanceId}:global`;
+    const globalSyncRequested = await this.baileysCache.get(globalCacheKey);
+    if (globalSyncRequested) {
+      return;
+    }
+
+    const rows = (await this.prismaRepository.$queryRaw`
+      SELECT "id", "messageTimestamp"
+      FROM "Message"
+      WHERE "instanceId" = ${this.instanceId}
+      AND "key"->>'remoteJid' = ${remoteJid}
+      AND "key"->>'id' <> ${message.key.id}
+      ORDER BY "messageTimestamp" DESC
+      LIMIT 1
+    `) as Pick<Message, 'id' | 'messageTimestamp'>[];
+
+    const lastStoredMessage = rows[0];
+    const secondsSinceLastMessage = lastStoredMessage ? timestamp - Number(lastStoredMessage.messageTimestamp) : null;
+    const shouldSyncHistory =
+      !lastStoredMessage || (secondsSinceLastMessage !== null && secondsSinceLastMessage > this.HISTORY_GAP_SECONDS);
+
+    if (!shouldSyncHistory) {
+      return;
+    }
+
+    await this.baileysCache.set(cacheKey, true, this.HISTORY_GAP_SYNC_TTL_SECONDS);
+    await this.baileysCache.set(globalCacheKey, true, this.HISTORY_GAP_GLOBAL_TTL_SECONDS);
+
+    try {
+      const requestId = await this.client.fetchMessageHistory(
+        this.HISTORY_GAP_SYNC_MESSAGE_COUNT,
+        message.key,
+        timestamp,
+      );
+      const gapDescription = lastStoredMessage ? `${secondsSinceLastMessage}s` : 'no local messages';
+      this.logger.warn(
+        `Requested WhatsApp history sync for ${remoteJid} after gap (${gapDescription}). RequestId: ${requestId}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Unable to request WhatsApp history sync for ${remoteJid}: ${error?.message ?? JSON.stringify(error)}`,
+      );
+    }
+  }
+
+  private normalizeGroupSubject(name?: string | null) {
+    return name?.replace(/\s+\(GROUP\)$/i, '').trim() || '';
+  }
+
+  private isUsableGroupName(remoteJid: string, name?: string | null) {
+    const cleanName = this.normalizeGroupSubject(name);
+
+    return !!cleanName && cleanName.toUpperCase() !== 'GROUP' && cleanName !== remoteJid.split('@')[0];
+  }
+
+  private async resolveGroupContactName(remoteJid: string, candidateName?: string | null): Promise<string | undefined> {
+    if (!remoteJid?.includes('@g.us')) {
+      return candidateName || remoteJid?.split('@')[0] || '';
+    }
+
+    const [chat, contact] = await Promise.all([
+      this.prismaRepository.chat.findFirst({
+        where: { instanceId: this.instanceId, remoteJid },
+        select: { name: true },
+      }),
+      this.prismaRepository.contact.findFirst({
+        where: { instanceId: this.instanceId, remoteJid },
+        select: { pushName: true },
+      }),
+    ]);
+
+    const preservedName = [chat?.name, contact?.pushName].find((name) => this.isUsableGroupName(remoteJid, name));
+    if (preservedName) {
+      return this.normalizeGroupSubject(preservedName);
+    }
+
+    if (this.isUsableGroupName(remoteJid, candidateName)) {
+      return this.normalizeGroupSubject(candidateName);
+    }
+
+    return undefined;
   }
 
   private prepareMessage(message: proto.IWebMessageInfo): any {

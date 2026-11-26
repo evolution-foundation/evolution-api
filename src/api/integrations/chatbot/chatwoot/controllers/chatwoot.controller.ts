@@ -81,4 +81,14 @@ export class ChatwootController {
 
     return this.chatwootService.receiveWebhook(instance, data);
   }
+
+  public async importData(instance: InstanceDto) {
+    if (!this.configService.get<Chatwoot>('CHATWOOT').ENABLED) throw new BadRequestException('Chatwoot is disabled');
+
+    try {
+      return await this.chatwootService.importData(instance);
+    } catch (error) {
+      throw new BadRequestException(error?.message || 'Error importing Chatwoot data');
+    }
+  }
 }
