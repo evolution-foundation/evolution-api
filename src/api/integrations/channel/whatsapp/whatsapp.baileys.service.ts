@@ -153,6 +153,7 @@ import { PassThrough, Readable } from 'stream';
 import { v4 } from 'uuid';
 
 import { BaileysMessageProcessor } from './baileysMessage.processor';
+import { PasskeyCeremony } from './passkey/passkey-ceremony.orchestrator';
 import { useVoiceCallsBaileys } from './voiceCalls/useVoiceCallsBaileys';
 
 export interface ExtendedIMessageKey extends proto.IMessageKey {
@@ -715,6 +716,23 @@ export class BaileysStartupService extends ChannelStartupService {
       this.sendDataWebhook(Events.CALL, payload, true, ['websocket']);
     });
 
+    if (process.env.PASSKEY_CEREMONY_ENABLED === 'true') {
+      const platformName = String(session.NAME || '').toUpperCase();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const deviceType = (proto.DeviceProps.PlatformType as any)[platformName] ?? proto.DeviceProps.PlatformType.CHROME;
+      this.passkeyCeremony = new PasskeyCeremony({
+        sock: this.client,
+        instanceId: this.instanceId,
+        deviceType,
+        logger: this.logger,
+        getCreds: () => this.instance.authState.state.creds,
+        saveCreds: async () => {
+          await this.instance.authState.saveCreds();
+        },
+      });
+      this.passkeyCeremony.attach();
+    }
+
     this.phoneNumber = number;
 
     return this.client;
@@ -746,6 +764,23 @@ export class BaileysStartupService extends ChannelStartupService {
       this.logger.error(error);
       throw new InternalServerErrorException(error?.toString());
     }
+  }
+
+  private passkeyCeremony?: PasskeyCeremony;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  public async submitPasskeyResponse(webAuthnResponse: any): Promise<void> {
+    if (!this.passkeyCeremony) {
+      throw new BadRequestException('Passkey ceremony is disabled. Set PASSKEY_CEREMONY_ENABLED=true to enable it.');
+    }
+    await this.passkeyCeremony.submitResponse(webAuthnResponse);
+  }
+
+  public async confirmPasskey(): Promise<void> {
+    if (!this.passkeyCeremony) {
+      throw new BadRequestException('Passkey ceremony is disabled. Set PASSKEY_CEREMONY_ENABLED=true to enable it.');
+    }
+    await this.passkeyCeremony.confirm();
   }
 
   private readonly chatHandle = {

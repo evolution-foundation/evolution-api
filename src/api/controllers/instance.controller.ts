@@ -5,6 +5,7 @@ import { PrismaRepository } from '@api/repository/repository.service';
 import { channelController, eventManager } from '@api/server.module';
 import { CacheService } from '@api/services/cache.service';
 import { WAMonitoringService } from '@api/services/monitor.service';
+import { buildPasskeyOpenURL, passkeyCeremonyStore } from '@api/services/passkey-ceremony.store';
 import { SettingsService } from '@api/services/settings.service';
 import { Events, Integration, wa } from '@api/types/wa.types';
 import { Auth, Chatwoot, ConfigService, HttpServer, WaBusiness } from '@config/env.config';
@@ -391,12 +392,27 @@ export class InstanceController {
   }
 
   public async connectionState({ instanceName }: InstanceDto) {
-    return {
+    const instance = this.waMonitor.waInstances[instanceName];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result: any = {
       instance: {
         instanceName: instanceName,
-        state: this.waMonitor.waInstances[instanceName]?.connectionStatus?.state,
+        state: instance?.connectionStatus?.state,
       },
     };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const instanceId = (instance as any)?.instanceId;
+    if (instanceId) {
+      const active = passkeyCeremonyStore.stateByInstance(instanceId);
+      if (active) {
+        result.instance.passkeyStage = active.state.stage;
+        result.instance.passkeyCode = active.state.code || '';
+        result.instance.passkeyOpenUrl = buildPasskeyOpenURL(active.token);
+      }
+    }
+
+    return result;
   }
 
   public async fetchInstances({ instanceName, instanceId, number }: InstanceDto, key: string) {
