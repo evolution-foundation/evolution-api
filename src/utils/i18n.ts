@@ -3,8 +3,11 @@ import fs from 'fs';
 import i18next from 'i18next';
 import path from 'path';
 
-const languages = ['en', 'pt-BR', 'es'];
 const translationsPath = path.join(__dirname, 'translations');
+const languages = fs
+  .readdirSync(translationsPath)
+  .filter((f) => f.endsWith('.json'))
+  .map((f) => f.replace('.json', ''));
 const configService: ConfigService = new ConfigService();
 
 const resources: any = {};
