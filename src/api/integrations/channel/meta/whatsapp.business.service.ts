@@ -857,7 +857,7 @@ export class BusinessStartupService extends ChannelStartupService {
             fromMe: this.isCloudApiStatusFromMe(item, received),
           };
           if (settings?.groups_ignore && key.remoteJid.includes('@g.us')) {
-            return;
+            continue;
           }
           if (key.remoteJid !== 'status@broadcast' && !key?.remoteJid?.match(/(:\d+)/)) {
             const findMessage = await this.prismaRepository.message.findFirst({
@@ -871,7 +871,7 @@ export class BusinessStartupService extends ChannelStartupService {
             });
 
             if (!findMessage) {
-              return;
+              continue;
             }
 
             const findMessageKey: any = findMessage?.key ?? {};
@@ -907,7 +907,7 @@ export class BusinessStartupService extends ChannelStartupService {
                 );
               }
 
-              return;
+              continue;
             }
 
             const message: any = {
