@@ -154,7 +154,7 @@ export class EventController {
     'CHATS_UPDATE',
     'CHATS_DELETE',
     'GROUPS_UPSERT',
-    'GROUP_UPDATE',
+    'GROUPS_UPDATE',
     'GROUP_PARTICIPANTS_UPDATE',
     'CONNECTION_UPDATE',
     'LABELS_EDIT',
