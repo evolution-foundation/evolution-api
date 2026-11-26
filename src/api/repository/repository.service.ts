@@ -1,6 +1,6 @@
-import { ConfigService } from '@config/env.config';
+import { ConfigService, Database } from '@config/env.config';
 import { Logger } from '@config/logger.config';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 export class Query<T> {
   where?: T;
@@ -15,6 +15,16 @@ export class PrismaRepository extends PrismaClient {
   }
 
   private readonly logger = new Logger('PrismaRepository');
+
+  public get isMysql(): boolean {
+    return this.configService.get<Database>('DATABASE').PROVIDER === 'mysql';
+  }
+
+  public jsonPath(...segments: string[]): Prisma.JsonFilterBase<'Message'>['path'] {
+    // Prisma generates a different path type for each provider; match that provider at runtime.
+    const path = this.isMysql ? '$' + segments.map((segment) => `.${JSON.stringify(segment)}`).join('') : segments;
+    return path as Prisma.JsonFilterBase<'Message'>['path'];
+  }
 
   public async onModuleInit() {
     await this.$connect();
