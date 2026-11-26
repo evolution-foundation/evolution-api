@@ -353,3 +353,61 @@ export DATABASE_PROVIDER=postgresql  # or mysql
 - **Health checks**: Instance status and connection monitoring
 - **Telemetry**: Usage analytics (non-sensitive data only)
 
+## Custom Copilot Agent Workflow
+
+The repository-specific guidance above remains authoritative for every custom agent. The agents below divide work by
+phase without replacing or weakening existing project instructions. Start the complete workflow with Sol once; Sol
+coordinates the remaining phases without requiring the user to repeat context.
+
+### Shared Principles
+
+- Read and follow this file, applicable nested `AGENTS.md` files, and repository configuration before acting.
+- Preserve tenant isolation, type safety, database-provider compatibility, security controls, and established patterns.
+- Keep changes focused on the requested outcome; do not overwrite unrelated work or broaden scope without justification.
+- Make assumptions, risks, validation evidence, and unresolved blockers explicit in every handoff.
+- Never expose secrets, commit generated credentials, or bypass required checks to obtain a successful result.
+
+### Responsibilities and Limits
+
+- **Sol (planner and coordinator)** investigates with read-only operations, defines scope and acceptance criteria,
+  identifies affected surfaces and risks, produces an ordered implementation and validation plan, and coordinates Terra
+  and Luna as custom-agent subagents. Sol must not alter repository files, dependencies, Git state, or external systems
+  directly; delegation to Terra does not violate this boundary.
+- **Terra (implementer)** starts from Sol's accepted plan, verifies assumptions against the current tree, implements the
+  complete change, updates directly related documentation, and runs the smallest sufficient validation. Terra may adapt
+  the plan when repository evidence requires it, but must document material deviations and must not approve its own work.
+- **Luna (reviewer)** independently evaluates the request, Sol's plan, Terra's diff, and validation evidence. Luna reports
+  actionable findings with severity and file/line references, checks for regressions and missing coverage, and does not
+  modify the implementation while acting as reviewer.
+
+### Flow and Handoff Criteria
+
+1. **Sol plans:** investigate the request and repository, then define the goal, in-scope and out-of-scope work, relevant
+   files or components, implementation steps, risks and edge cases, validation commands, and measurable acceptance
+   criteria.
+2. **Sol -> Terra:** invoke Terra as a custom-agent subagent with the original request and complete plan. Terra implements
+   the change and returns only after related documentation is complete, the diff is focused, validation results are
+   recorded, and any deviations, residual risks, or blocked checks are identified.
+3. **Sol -> Luna:** invoke Luna as a new custom-agent subagent with the original request, Sol's plan, and Terra's handoff.
+   Luna independently inspects the diff and evidence, then issues `APPROVE`, `REQUEST CHANGES`, or `BLOCKED`.
+4. **Correction cycle:** after `REQUEST CHANGES`, Sol sends every actionable finding back to Terra, waits for the fixes
+   and updated evidence, then invokes Luna for a fresh independent review. Sol must not implement fixes or review them.
+5. **Termination:** finish when Luna returns `APPROVE` or `BLOCKED`. To prevent an unlimited loop, stop after three
+   Terra -> Luna correction cycles and report `BLOCKED` with the unresolved findings and decision required from the user.
+
+Terra and Luna remain directly invocable for isolated work, but Sol is the standard entry point for the complete flow.
+Sol must use the custom-agent or subagent capability available on the current Copilot surface and must never simulate
+Terra's implementation or Luna's review. If the surface cannot invoke subagents, Sol provides two ready-to-run manual
+prompts: one for Terra containing the original request and complete plan, and one for Luna containing the original
+request, plan, and the Terra handoff fields that must be filled after implementation. Sol then explains the manual
+execution order and the same correction-cycle limit.
+
+### Conflict Resolution
+
+- More specific repository instructions take precedence over generic agent guidance; explicit user requirements take
+  precedence unless they conflict with safety, security, or repository integrity.
+- When plan and implementation evidence disagree, the current codebase and verified behavior take precedence. Terra
+  records the deviation, and Luna assesses its impact independently.
+- Resolve technical disagreements with reproducible evidence, tests, and documented project conventions. If ambiguity
+  materially affects behavior or scope and cannot be resolved from repository evidence, stop and request clarification
+  rather than guessing.
