@@ -1158,6 +1158,37 @@ export class BusinessStartupService extends ChannelStartupService {
           return await this.post(content, 'messages');
         }
         if (message['buttons']) {
+          const ctaUrlButton = message['buttons'].find((button) => button.type === 'cta_url');
+          if (ctaUrlButton) {
+            // WhatsApp Cloud API CTA URL button: a single tappable link button in a
+            // free-form (session) message. It cannot be combined with reply buttons.
+            content = {
+              messaging_product: 'whatsapp',
+              recipient_type: 'individual',
+              to: number.replace(/\D/g, ''),
+              type: 'interactive',
+              interactive: {
+                type: 'cta_url',
+                body: {
+                  text: message['text'] || 'Select',
+                },
+                action: {
+                  name: 'cta_url',
+                  parameters: {
+                    display_text: ctaUrlButton.displayText ?? ctaUrlButton.url,
+                    url: ctaUrlButton.url,
+                  },
+                },
+              },
+            };
+            if (quoted) {
+              content.context = { message_id: quoted.id };
+            }
+            message = {
+              conversation: `${message['text'] || 'Select'}\n▶️ ${ctaUrlButton.displayText ?? ctaUrlButton.url}: ${ctaUrlButton.url}\n`,
+            };
+            return await this.post(content, 'messages');
+          }
           content = {
             messaging_product: 'whatsapp',
             recipient_type: 'individual',
@@ -1176,7 +1207,7 @@ export class BusinessStartupService extends ChannelStartupService {
           quoted ? (content.context = { message_id: quoted.id }) : content;
           let formattedText = '';
           for (const item of message['buttons']) {
-            formattedText += `▶️ ${item.reply?.title}\n`;
+            formattedText += `▶️ ${item.reply?.title ?? item.displayText}\n`;
           }
           message = { conversation: `${message['text'] || 'Select'}\n` + formattedText };
           return await this.post(content, 'messages');
@@ -1536,6 +1567,13 @@ export class BusinessStartupService extends ChannelStartupService {
       {
         text: !embeddedMedia?.mediaKey ? data.title : undefined,
         buttons: data.buttons.map((button) => {
+          if (button.type === 'url' && button.url) {
+            return {
+              type: 'cta_url',
+              displayText: button.displayText,
+              url: button.url,
+            };
+          }
           return {
             type: 'reply',
             reply: {
