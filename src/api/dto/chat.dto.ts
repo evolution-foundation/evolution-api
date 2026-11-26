@@ -90,6 +90,15 @@ export class MarkChatUnreadDto {
   chat?: string;
 }
 
+/** Request to update WhatsApp Advanced Chat Privacy for a chat or group. */
+export class LimitSharingDto {
+  /** Required, non-empty chat identifier; normalized to a WhatsApp JID before sending. */
+  chat: string;
+
+  /** Required boolean: true enables limit sharing; false disables it. */
+  limitSharing: boolean;
+}
+
 export class PrivacySettingDto {
   readreceipts: WAReadReceiptsValue;
   profile: WAPrivacyValue;

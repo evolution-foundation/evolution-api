@@ -140,6 +140,17 @@ export const markChatUnreadSchema: JSONSchema7 = {
   required: ['lastMessage'],
 };
 
+export const limitSharingSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    chat: { type: 'string' },
+    limitSharing: { type: 'boolean', enum: [true, false] },
+  },
+  required: ['chat', 'limitSharing'],
+  ...isNotEmpty('chat'),
+};
+
 export const deleteMessageSchema: JSONSchema7 = {
   $id: v4(),
   type: 'object',
