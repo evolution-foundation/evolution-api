@@ -10,6 +10,7 @@
     "start:prod": "node dist/main",
     "dev:server": "tsx watch ./src/main.ts",
     "test": "tsx watch ./test/all.test.ts",
+    "test:webhook": "tsx --test src/api/integrations/event/webhook/webhook.url.test.ts",
     "lint": "eslint --fix --ext .ts src",
     "lint:check": "eslint --ext .ts src",
     "commit": "cz",

@@ -35,6 +35,9 @@ jobs:
     - name: Check linting
       run: npm run lint:check
 
+    - name: Test webhook URL validation and persistence
+      run: npm run test:webhook
+
     - name: Generate Prisma client
       run: npm run db:generate
 

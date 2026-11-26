@@ -2,6 +2,7 @@ import { JSONSchema7 } from 'json-schema';
 import { v4 } from 'uuid';
 
 import { EventController } from '../event.controller';
+import { webhookUrlSchema } from './webhook.url';
 
 const isNotEmpty = (...propertyNames: string[]): JSONSchema7 => {
   const properties = {};
@@ -30,7 +31,7 @@ export const webhookSchema: JSONSchema7 = {
       type: 'object',
       properties: {
         enabled: { type: 'boolean' },
-        url: { type: 'string' },
+        url: webhookUrlSchema,
         headers: { type: 'object' },
         byEvents: { type: 'boolean' },
         base64: { type: 'boolean' },

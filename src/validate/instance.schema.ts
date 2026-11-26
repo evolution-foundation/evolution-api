@@ -1,3 +1,4 @@
+import { webhookUrlSchema } from '@api/integrations/event/webhook/webhook.url';
 import { Integration } from '@api/types/wa.types';
 import { JSONSchema7 } from 'json-schema';
 import { v4 } from 'uuid';
@@ -51,6 +52,11 @@ export const instanceSchema: JSONSchema7 = {
     proxyUsername: { type: 'string' },
     proxyPassword: { type: 'string' },
     // Webhook
+    webhook: {
+      type: 'object',
+      properties: { url: webhookUrlSchema },
+      required: ['url'],
+    },
     webhookUrl: { type: 'string' },
     webhookByEvents: { type: 'boolean' },
     webhookBase64: { type: 'boolean' },
