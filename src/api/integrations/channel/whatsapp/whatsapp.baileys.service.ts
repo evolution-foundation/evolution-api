@@ -2163,6 +2163,19 @@ export class BaileysStartupService extends ChannelStartupService {
               const remotesJidMap: Record<string, number> = {};
 
               for (const event of payload) {
+                // Group receipts arrive here instead of `messages.update`, with
+                // delivery carried by `receiptTimestamp` and read by `readTimestamp`
+                // (Baileys sets exactly one of them per event). Only the latter was
+                // consumed, so group delivery never reached the webhook.
+                this.sendDataWebhook(Events.MESSAGES_UPDATE, {
+                  keyId: event.key.id,
+                  remoteJid: event.key.remoteJid,
+                  fromMe: event.key.fromMe,
+                  participant: event.receipt.userJid,
+                  status: typeof event.receipt.receiptTimestamp === 'number' ? 'DELIVERY_ACK' : 'READ',
+                  instanceId: this.instanceId,
+                });
+
                 if (typeof event.key.remoteJid === 'string' && typeof event.receipt.readTimestamp === 'number') {
                   remotesJidMap[event.key.remoteJid] = event.receipt.readTimestamp;
                 }
