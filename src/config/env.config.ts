@@ -882,7 +882,7 @@ export class ConfigService {
         },
         LOCAL: {
           ENABLED: process.env?.CACHE_LOCAL_ENABLED === 'true',
-          TTL: Number.parseInt(process.env?.CACHE_REDIS_TTL) || 86400,
+          TTL: Number.parseInt(process.env?.CACHE_LOCAL_TTL) || 86400,
         },
       },
       S3: {
