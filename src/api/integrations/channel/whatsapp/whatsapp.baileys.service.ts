@@ -353,6 +353,8 @@ export class BaileysStartupService extends ChannelStartupService {
       where: { id: this.instanceId },
       data: { connectionStatus: 'close' },
     });
+
+    this.instance.qrcode = { count: 0 };
   }
 
   public async getProfileName() {
@@ -804,6 +806,7 @@ export class BaileysStartupService extends ChannelStartupService {
     };
 
     this.endSession = false;
+    this.isDeleting = false;
 
     this.client = makeWASocket(socketConfig);
 
