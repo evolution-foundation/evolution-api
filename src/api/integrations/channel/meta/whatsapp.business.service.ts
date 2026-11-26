@@ -1,4 +1,4 @@
-import { NumberBusiness } from '@api/dto/chat.dto';
+import { NumberBusiness, ReadMessageDto } from '@api/dto/chat.dto';
 import {
   ContactMessage,
   MediaMessage,
@@ -1769,8 +1769,61 @@ export class BusinessStartupService extends ChannelStartupService {
   public async whatsappNumber() {
     throw new BadRequestException('Method not available on WhatsApp Business API');
   }
-  public async markMessageAsRead() {
-    throw new BadRequestException('Method not available on WhatsApp Business API');
+  public async markMessageAsRead(data: ReadMessageDto) {
+    try {
+      if (!data?.readMessages || data.readMessages.length === 0) {
+        throw new BadRequestException('readMessages must contain at least one message');
+      }
+
+      if (!this.token || !this.number) {
+        throw new BadRequestException('Instance token (Meta Access Token) or number (Phone Number ID) not configured');
+      }
+
+      for (const read of data.readMessages) {
+        const messageId = read?.id;
+
+        if (!messageId) {
+          throw new BadRequestException('Each readMessages entry must contain an id (wamid)');
+        }
+
+        const content = {
+          messaging_product: 'whatsapp',
+          status: 'read',
+          message_id: messageId,
+        };
+
+        const result = await this.post(content, 'messages');
+
+        // Meta returns { success: true } for status updates, while post() resolves
+        // with the Graph API error payload on failure — treat any error/message
+        // shaped response as a failure.
+        const isError =
+          !result ||
+          (result as any)?.error ||
+          (result as any)?.error_data ||
+          ((result as any)?.success !== true &&
+            !(result as any)?.messages &&
+            typeof (result as any)?.message === 'string');
+
+        if (isError) {
+          const metaMessage =
+            (result as any)?.error?.message ||
+            (result as any)?.message ||
+            JSON.stringify(result ?? 'Unknown Meta API error');
+          this.logger.error(`Meta markMessageAsRead failed for ${messageId}: ${metaMessage}`);
+          throw new BadRequestException(`Failed to mark message as read: ${metaMessage}`);
+        }
+      }
+
+      return { message: 'Messages marked as read', read: 'success' };
+    } catch (error) {
+      if (error?.status) {
+        throw error;
+      }
+
+      this.logger.error(`Error marking message as read: ${error?.toString()}`);
+      throw new BadRequestException('Failed to mark message as read', error?.toString());
+    }
   }
   public async archiveChat() {
     throw new BadRequestException('Method not available on WhatsApp Business API');
