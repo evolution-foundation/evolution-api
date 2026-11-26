@@ -131,9 +131,20 @@ export class BusinessStartupService extends ChannelStartupService {
     try {
       this.loadChatwoot();
 
-      this.eventHandler(content);
+      // Determinar o phoneNumber baseado no tipo de conteúdo recebido
+      if (content.messages && content.messages.length > 0) {
+        this.phoneNumber = createJid(content.messages[0].from);
+      } else if (content.message_echoes && content.message_echoes.length > 0) {
+        // message_echoes são ecos das mensagens enviadas pelo próprio número
+        this.phoneNumber = createJid(content.message_echoes[0].to);
+      } else if (content.statuses && content.statuses.length > 0) {
+        this.phoneNumber = createJid(content.statuses[0].recipient_id);
+      } else {
+        this.logger.warn('Nenhuma mensagem, status ou echo encontrado no conteúdo recebido');
+        return;
+      }
 
-      this.phoneNumber = createJid(content.messages ? content.messages[0].from : content.statuses[0]?.recipient_id);
+      this.eventHandler(content);
     } catch (error) {
       this.logger.error(error);
       throw new InternalServerErrorException(error?.toString());
@@ -385,17 +396,34 @@ export class BusinessStartupService extends ChannelStartupService {
   protected async messageHandle(received: any, database: Database, settings: any) {
     try {
       let messageRaw: any;
-      let pushName: any;
+      const firstMessage = received.messages?.[0];
+      const firstContact = received.contacts?.[0];
+      const contactPhone =
+        firstContact?.profile?.phone ?? firstContact?.wa_id ?? firstContact?.phone ?? firstContact?.input;
+      const messageRemoteJid = received.isEcho ? firstMessage?.to : firstMessage?.from;
+      const remoteJidSource = messageRemoteJid || contactPhone;
+      const remoteJid = remoteJidSource ? createJid(remoteJidSource) : this.phoneNumber;
+      const pushName =
+        firstContact?.profile?.name ?? firstContact?.name ?? firstContact?.formatted_name ?? firstContact?.pushName;
 
-      if (received.contacts) pushName = received.contacts[0].profile.name;
+      if (!remoteJid && received.messages) {
+        this.logger.warn('Unable to identify remoteJid for received message');
+        return;
+      }
 
       if (received.messages) {
         const message = received.messages[0]; // Añadir esta línea para definir message
 
+        // Determinar fromMe: true se é um echo ou se from == phone_number_id ou display_phone_number
+        const isFromMe =
+          received.isEcho === true ||
+          message.from === received.metadata?.phone_number_id ||
+          message.from === received.metadata?.display_phone_number;
+
         const key = {
           id: message.id,
-          remoteJid: this.phoneNumber,
-          fromMe: message.from === received.metadata.phone_number_id,
+          remoteJid,
+          fromMe: isFromMe,
         };
 
         if (message.type === 'sticker') {
@@ -697,29 +725,21 @@ export class BusinessStartupService extends ChannelStartupService {
           });
         }
 
-        const contact = await this.prismaRepository.contact.findFirst({
-          where: { instanceId: this.instanceId, remoteJid: key.remoteJid },
-        });
-
         const contactRaw: any = {
-          remoteJid: received.contacts[0].profile.phone,
-          pushName,
-          // profilePicUrl: '',
+          remoteJid: key.remoteJid,
           instanceId: this.instanceId,
         };
+        if (pushName) contactRaw.pushName = pushName;
 
         if (contactRaw.remoteJid === 'status@broadcast') {
           return;
         }
 
-        if (contact) {
-          const contactRaw: any = {
-            remoteJid: received.contacts[0].profile.phone,
-            pushName,
-            // profilePicUrl: '',
-            instanceId: this.instanceId,
-          };
+        const contact = await this.prismaRepository.contact.findFirst({
+          where: { instanceId: this.instanceId, remoteJid: contactRaw.remoteJid },
+        });
 
+        if (contact) {
           this.sendDataWebhook(Events.CONTACTS_UPDATE, contactRaw);
 
           if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
@@ -926,11 +946,34 @@ export class BusinessStartupService extends ChannelStartupService {
         } else {
           this.logger.warn(`Tipo de mensaje no reconocido: ${message.type}`);
         }
-      } else if (content.statuses) {
+      } else if (content.message_echoes && content.message_echoes.length > 0) {
+        // message_echoes são ecos das mensagens enviadas pelo próprio número
+        // Converter message_echoes para o formato de messages para processamento
+        const echoMessage = content.message_echoes[0];
+        this.logger.log(`Processando message_echo do tipo: ${echoMessage.type}`);
+
+        // Criar estrutura compatível com o formato esperado
+        // Adicionar flag isEcho para que messageHandle saiba que fromMe = true
+        const convertedContent = {
+          ...content,
+          isEcho: true, // Flag para indicar que é um echo (mensagem enviada pelo próprio número)
+          messages: content.message_echoes.map((echo: any) => ({
+            ...echo,
+            from: echo.from,
+            id: echo.id,
+            timestamp: echo.timestamp,
+            type: echo.type,
+            text: echo.text,
+          })),
+        };
+
+        // Processar como mensagem enviada (fromMe = true)
+        this.messageHandle(convertedContent, database, settings);
+      } else if (content.statuses && content.statuses.length > 0) {
         // Procesar actualizaciones de estado
         this.messageHandle(content, database, settings);
       } else {
-        this.logger.warn('No se encontraron mensajes ni estados en el contenido recibido');
+        this.logger.warn('No se encontraron mensajes, message_echoes ni estados en el contenido recibido');
       }
     } catch (error) {
       this.logger.error('Error en eventHandler:');

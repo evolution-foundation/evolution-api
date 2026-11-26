@@ -2,6 +2,7 @@
 import '@utils/instrumentSentry';
 
 // Now import other modules
+import { requestLogger } from '@api/middleware/requestLogger.middleware';
 import { ProviderFiles } from '@api/provider/sessions';
 import { PrismaRepository } from '@api/repository/repository.service';
 import { HttpStatus, router } from '@api/routes/index.router';
@@ -43,6 +44,8 @@ async function bootstrap() {
 
   const prismaRepository = new PrismaRepository(configService);
   await prismaRepository.onModuleInit();
+
+  app.use(requestLogger);
 
   app.use(
     cors({
