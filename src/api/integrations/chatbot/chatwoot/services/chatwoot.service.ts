@@ -1858,6 +1858,16 @@ export class ChatwootService {
         msg?.message?.viewOnceMessageV2?.message?.imageMessage?.url ||
         msg?.message?.viewOnceMessageV2?.message?.videoMessage?.url ||
         msg?.message?.viewOnceMessageV2?.message?.audioMessage?.url,
+      templateMessage: msg?.templateMessage?.hydratedTemplate?.hydratedContentText,
+      buttonsMessage: msg?.buttonsMessage?.contentText,
+      interactiveMessage: msg?.interactiveMessage?.body?.text,
+      // AlbumMessage carries no text (WAProto: only expectedImageCount/expectedVideoCount) —
+      // the photos/videos arrive as separate associatedChildMessage-wrapped messages.
+      albumMessage: msg?.albumMessage
+        ? `[álbum: ${msg.albumMessage.expectedImageCount ?? 0} foto(s), ${msg.albumMessage.expectedVideoCount ?? 0} vídeo(s)]`
+        : undefined,
+      pollCreationMessage: msg?.pollCreationMessage?.name,
+      groupInviteMessage: msg?.groupInviteMessage?.caption || msg?.groupInviteMessage?.groupName,
     };
 
     return types;
@@ -2104,6 +2114,12 @@ export class ChatwootService {
   }
 
   public getConversationMessage(msg: any) {
+    // associatedChildMessage (WAProto: FutureProofMessage) just wraps a real embedded
+    // message (e.g. an album's individual photo/video) — unwrap and extract from that.
+    if (msg?.associatedChildMessage?.message) {
+      return this.getConversationMessage(msg.associatedChildMessage.message);
+    }
+
     const types = this.getTypeMessage(msg);
 
     const messageContent = this.getMessageContent(types);
@@ -2192,8 +2208,22 @@ export class ChatwootService {
           };
         }
 
+        // WhatsApp-internal placeholder (e.g. device-linking mask) — never real user content.
+        if (body.message?.placeholderMessage) {
+          this.logger.verbose('Ignoring internal WhatsApp placeholderMessage (not a user message)');
+          return;
+        }
+
+        // Encrypted edit/event payload targeting an existing message (WAProto SecretEncryptedMessage:
+        // EVENT_EDIT/MESSAGE_EDIT) — not new displayable content. Decrypting and applying it as an
+        // edit isn't implemented; skip explicitly so it isn't logged as a dropped/lost message.
+        if (body.message?.secretEncryptedMessage) {
+          this.logger.verbose('Ignoring secretEncryptedMessage (message edit/event payload, not new content)');
+          return;
+        }
+
         const originalMessage = await this.getConversationMessage(body.message);
-        const bodyMessage = originalMessage
+        let bodyMessage = originalMessage
           ? originalMessage
               .replaceAll(/\*((?!\s)([^\n*]+?)(?<!\s))\*/g, '**$1**')
               .replaceAll(/_((?!\s)([^\n_]+?)(?<!\s))_/g, '*$1*')
@@ -2229,8 +2259,20 @@ export class ChatwootService {
         const isInteractiveButtonMessage = this.isInteractiveButtonMessage(body.messageType, body.message);
 
         if (!bodyMessage && !isMedia && !reactionMessage && !isInteractiveButtonMessage) {
-          this.logger.warn('no body message found');
-          return;
+          // Degrade gracefully instead of silently dropping the conversation: any message type
+          // with no dedicated extractor above still gets a placeholder body, and the actual type
+          // is logged so it's discoverable instead of only visible by reconciling two databases.
+          const detectedType = Object.keys(body.message ?? {}).find((key) => body.message[key] !== undefined);
+
+          if (!detectedType) {
+            this.logger.warn('no body message found (empty message payload)');
+            return;
+          }
+
+          this.logger.warn(
+            `no content extractor for message type "${detectedType}" — creating conversation with a placeholder body instead of dropping it`,
+          );
+          bodyMessage = `[mensagem não suportada: ${detectedType}]`;
         }
 
         const getConversation = await this.createConversation(instance, body);
