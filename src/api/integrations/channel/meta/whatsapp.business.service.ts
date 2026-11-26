@@ -1760,6 +1760,12 @@ export class BusinessStartupService extends ChannelStartupService {
   public async pollMessage() {
     throw new BadRequestException('Method not available on WhatsApp Business API');
   }
+  public async pollVoteMessage() {
+    throw new BadRequestException('Método não disponível na WhatsApp Business API');
+  }
+  public async eventResponseMessage() {
+    throw new BadRequestException('Método não disponível na WhatsApp Business API');
+  }
   public async statusMessage() {
     throw new BadRequestException('Method not available on WhatsApp Business API');
   }

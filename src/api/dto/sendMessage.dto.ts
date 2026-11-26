@@ -169,6 +169,19 @@ export class SendContactDto extends Metadata {
   contact: ContactMessage[];
 }
 
+export class SendPollVoteDto {
+  key: proto.IMessageKey;
+  options: string[];
+  jidMode?: 'auto' | 'lid' | 'pn';
+}
+
+export class SendEventResponseDto {
+  key: proto.IMessageKey;
+  response: 'going' | 'maybe' | 'not_going';
+  extraGuestCount?: number;
+  jidMode?: 'auto' | 'lid' | 'pn';
+}
+
 export class SendReactionDto {
   key: proto.IMessageKey;
   reaction: string;

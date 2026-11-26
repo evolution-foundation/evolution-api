@@ -313,6 +313,40 @@ export const reactionMessageSchema: JSONSchema7 = {
   required: ['key', 'reaction'],
 };
 
+const messageKeySchema: JSONSchema7 = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    remoteJid: { type: 'string' },
+    fromMe: { type: 'boolean', enum: [true, false] },
+  },
+  required: ['id', 'remoteJid'],
+  ...isNotEmpty('id', 'remoteJid'),
+};
+
+export const pollVoteMessageSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    key: messageKeySchema,
+    options: { type: 'array', items: { type: 'string' }, maxItems: 12 },
+    jidMode: { type: 'string', enum: ['auto', 'lid', 'pn'] },
+  },
+  required: ['key', 'options'],
+};
+
+export const eventResponseMessageSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    key: messageKeySchema,
+    response: { type: 'string', enum: ['going', 'maybe', 'not_going'] },
+    extraGuestCount: { type: 'integer', minimum: 0, maximum: 50 },
+    jidMode: { type: 'string', enum: ['auto', 'lid', 'pn'] },
+  },
+  required: ['key', 'response'],
+};
+
 export const pollMessageSchema: JSONSchema7 = {
   $id: v4(),
   type: 'object',

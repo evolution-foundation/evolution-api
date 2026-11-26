@@ -4,10 +4,12 @@ import {
   SendButtonsDto,
   SendCarouselDto,
   SendContactDto,
+  SendEventResponseDto,
   SendListDto,
   SendLocationDto,
   SendMediaDto,
   SendPollDto,
+  SendPollVoteDto,
   SendPtvDto,
   SendReactionDto,
   SendStatusDto,
@@ -21,10 +23,12 @@ import {
   buttonsMessageSchema,
   carouselMessageSchema,
   contactMessageSchema,
+  eventResponseMessageSchema,
   listMessageSchema,
   locationMessageSchema,
   mediaMessageSchema,
   pollMessageSchema,
+  pollVoteMessageSchema,
   ptvMessageSchema,
   reactionMessageSchema,
   statusMessageSchema,
@@ -150,6 +154,26 @@ export class MessageRouter extends RouterBroker {
           schema: reactionMessageSchema,
           ClassRef: SendReactionDto,
           execute: (instance, data) => sendMessageController.sendReaction(instance, data),
+        });
+
+        return res.status(HttpStatus.CREATED).json(response);
+      })
+      .post(this.routerPath('sendPollVote'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<SendPollVoteDto>({
+          request: req,
+          schema: pollVoteMessageSchema,
+          ClassRef: SendPollVoteDto,
+          execute: (instance, data) => sendMessageController.sendPollVote(instance, data),
+        });
+
+        return res.status(HttpStatus.CREATED).json(response);
+      })
+      .post(this.routerPath('sendEventResponse'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<SendEventResponseDto>({
+          request: req,
+          schema: eventResponseMessageSchema,
+          ClassRef: SendEventResponseDto,
+          execute: (instance, data) => sendMessageController.sendEventResponse(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);
