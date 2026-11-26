@@ -345,7 +345,7 @@ export class InstanceController {
       };
     } catch (error) {
       this.logger.error(error);
-      return { error: true, message: error.toString() };
+      return { error: true, message: error?.message ?? String(error) };
     }
   }
 
@@ -392,7 +392,7 @@ export class InstanceController {
       };
     } catch (error) {
       this.logger.error(error);
-      return { error: true, message: error.toString() };
+      return { error: true, message: error?.message ?? String(error) };
     }
   }
 
@@ -453,47 +453,41 @@ export class InstanceController {
 
       return { status: 'SUCCESS', error: false, response: { message: 'Instance logged out' } };
     } catch (error) {
-      throw new InternalServerErrorException(error.toString());
+      throw new InternalServerErrorException(error?.message ?? String(error));
     }
   }
 
   public async deleteInstance({ instanceName }: InstanceDto) {
     const { instance } = await this.connectionState({ instanceName });
+
+    const waInstances = this.waMonitor.waInstances[instanceName];
+
     try {
-      const waInstances = this.waMonitor.waInstances[instanceName];
       if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED) waInstances?.clearCacheChatwoot();
-
-      if (instance.state === 'connecting' || instance.state === 'open') {
-        try {
-          await this.logout({ instanceName });
-        } catch (error) {
-          // logout can throw "Connection Closed" when the underlying Baileys
-          // socket is already dead but waInstances[name] still exists. We
-          // must continue to the remove.instance emit below — that is the
-          // only path that purges the in-memory entry and runs cleaningUp().
-          // Without this catch, the stale entry persists until the entire
-          // process restarts.
-          this.logger.warn({
-            message: 'logout failed during deleteInstance — proceeding with cleanup',
-            instanceName,
-            error,
-          });
-        }
-      }
-
-      try {
-        waInstances?.sendDataWebhook(Events.INSTANCE_DELETE, {
-          instanceName,
-          instanceId: waInstances.instanceId,
-        });
-      } catch (error) {
-        this.logger.error(error);
-      }
-
-      this.eventEmitter.emit('remove.instance', instanceName, 'inner');
-      return { status: 'SUCCESS', error: false, response: { message: 'Instance deleted' } };
     } catch (error) {
-      throw new BadRequestException(error.toString());
+      this.logger.warn(`clearCacheChatwoot failed for "${instanceName}": ${error?.message ?? String(error)}`);
     }
+
+    if (instance.state === 'connecting' || instance.state === 'open') {
+      try {
+        await this.logout({ instanceName });
+      } catch (error) {
+        this.logger.warn(
+          `Logout failed for "${instanceName}": ${error?.message ?? String(error)}. Continuing cleanup.`,
+        );
+      }
+    }
+
+    try {
+      waInstances?.sendDataWebhook(Events.INSTANCE_DELETE, {
+        instanceName,
+        instanceId: waInstances?.instanceId,
+      });
+    } catch (error) {
+      this.logger.error(error);
+    }
+
+    this.eventEmitter.emit('remove.instance', instanceName, 'inner');
+    return { status: 'SUCCESS', error: false, response: { message: 'Instance deleted' } };
   }
 }
