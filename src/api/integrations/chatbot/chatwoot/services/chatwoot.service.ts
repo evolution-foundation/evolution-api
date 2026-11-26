@@ -41,6 +41,13 @@ interface ChatwootMessage {
   isRead?: boolean;
 }
 
+interface WhatsAppErrorStatus {
+  code?: string;
+  keyId?: string;
+  remoteJid?: string;
+  status?: string;
+}
+
 export class ChatwootService {
   private readonly logger = new Logger('ChatwootService');
 
@@ -108,6 +115,45 @@ export class ChatwootService {
 
   public getCache() {
     return this.cache;
+  }
+
+  public async markMessageAsFailed(message: MessageModel, error: WhatsAppErrorStatus) {
+    if (!message?.chatwootMessageId) {
+      return;
+    }
+
+    if (!this.pgClient?.query) {
+      this.logger.warn('Chatwoot database connection not available');
+      return;
+    }
+
+    const metadata = {
+      evolution_error: {
+        status: error.status,
+        code: error.code,
+        key_id: error.keyId,
+        remote_jid: error.remoteJid,
+        at: new Date().toISOString(),
+      },
+    };
+
+    const result = await this.pgClient.query(
+      `
+        UPDATE messages
+        SET
+          status = 3,
+          additional_attributes = COALESCE(additional_attributes, '{}'::jsonb) || $1::jsonb,
+          updated_at = NOW()
+        WHERE id = $2
+      `,
+      [JSON.stringify(metadata), message.chatwootMessageId],
+    );
+
+    this.logger.warn(
+      `Marked Chatwoot message ${message.chatwootMessageId} as failed after WhatsApp ${error.status}${
+        error.code ? ` (${error.code})` : ''
+      }; rows affected: ${result.rowCount}`,
+    );
   }
 
   public async create(instance: InstanceDto, data: ChatwootDto) {
