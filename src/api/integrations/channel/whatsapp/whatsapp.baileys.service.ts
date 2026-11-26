@@ -322,6 +322,18 @@ export class BaileysStartupService extends ChannelStartupService {
     // is delayed.
     this.stateConnection = { state: 'close', statusReason: 401 };
 
+    await this.clearStoredCredentials();
+  }
+
+  /**
+   * Wipe the stored auth credentials and mark the instance as closed.
+   *
+   * Extracted from logoutInstance() so the loggedOut path in connectionUpdate()
+   * can reuse it. Leaving half-valid credentials behind is what makes an
+   * instance impossible to pair again: Baileys sees the stored identity and
+   * tries to re-authenticate instead of requesting a pairing QR code.
+   */
+  private async clearStoredCredentials() {
     const db = this.configService.get<Database>('DATABASE');
     const cache = this.configService.get<CacheConf>('CACHE');
     const provider = this.configService.get<ProviderSession>('PROVIDER');
@@ -509,6 +521,21 @@ export class BaileysStartupService extends ChannelStartupService {
       const isInitialConnection = !this.instance.wuid && (this.instance.qrcode?.count ?? 0) === 0;
 
       if (isInitialConnection) {
+        // A loggedOut here means the credentials we had stored were rejected
+        // before any QR code could be issued. Returning without clearing them
+        // makes the instance permanently unpairable: on every later attempt
+        // Baileys finds the stored identity (`me` / `account`), tries to
+        // re-authenticate with it instead of asking for a pairing code, gets
+        // another 401, and comes back here. The instance loops forever with
+        // `hasQr: false` and /instance/connect keeps returning an empty code,
+        // so the QR dialog spins and the phone reports a network problem.
+        if (statusCode === DisconnectReason.loggedOut) {
+          this.logger.warn(
+            'Stored credentials were rejected (401) before a QR code was issued; clearing them so the next attempt can pair',
+          );
+          await this.clearStoredCredentials();
+        }
+
         this.logger.info('Initial connection closed, waiting for QR code generation...');
         return;
       }
