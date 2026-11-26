@@ -85,6 +85,7 @@ import { createId as cuid } from '@paralleldrive/cuid2';
 import { Instance, Message } from '@prisma/client';
 import { createJid } from '@utils/createJid';
 import { fetchLatestWaWebVersion } from '@utils/fetchLatestWaWebVersion';
+import { jsonPath } from '@utils/jsonPath';
 import { makeProxyAgent, makeProxyAgentUndici } from '@utils/makeProxyAgent';
 import { getOnWhatsappCache, saveOnWhatsappCache } from '@utils/onWhatsappCache';
 import { status } from '@utils/renderStatus';
@@ -4184,7 +4185,7 @@ export class BaileysStartupService extends ChannelStartupService {
   }
 
   public async getLastMessage(number: string) {
-    const where: any = { key: { path: ['remoteJid'], equals: number }, instanceId: this.instanceId };
+    const where: any = { key: { path: jsonPath('remoteJid'), equals: number }, instanceId: this.instanceId };
 
     const messages = await this.prismaRepository.message.findMany({
       where,
@@ -4271,7 +4272,7 @@ export class BaileysStartupService extends ChannelStartupService {
         if (messageId) {
           const isLogicalDeleted = configService.get<Database>('DATABASE').DELETE_DATA.LOGICAL_MESSAGE_DELETE;
           let message = await this.prismaRepository.message.findFirst({
-            where: { key: { path: ['id'], equals: messageId } },
+            where: { key: { path: jsonPath('id'), equals: messageId } },
           });
           if (isLogicalDeleted) {
             if (!message) return response;
@@ -4691,7 +4692,7 @@ export class BaileysStartupService extends ChannelStartupService {
           const messageId = messageSent.message?.protocolMessage?.key?.id;
           if (messageId && this.configService.get<Database>('DATABASE').SAVE_DATA.NEW_MESSAGE) {
             let message = await this.prismaRepository.message.findFirst({
-              where: { key: { path: ['id'], equals: messageId } },
+              where: { key: { path: jsonPath('id'), equals: messageId } },
             });
             if (!message) throw new NotFoundException('Message not found');
 
@@ -5329,15 +5330,16 @@ export class BaileysStartupService extends ChannelStartupService {
         `INSERT INTO Chat (id, instanceId, remoteJid, labels, createdAt, updatedAt)
          VALUES (?, ?, ?, JSON_ARRAY(?), NOW(), NOW())
          ON DUPLICATE KEY UPDATE
-           labels = JSON_ARRAY_APPEND(
-             COALESCE(labels, JSON_ARRAY()),
-             '$',
-             ?
+           labels = IF(
+             JSON_CONTAINS(COALESCE(labels, JSON_ARRAY()), JSON_QUOTE(?)),
+             labels,
+             JSON_ARRAY_APPEND(COALESCE(labels, JSON_ARRAY()), '$', ?)
            ),
            updatedAt = NOW()`,
         id,
         instanceId,
         chatId,
+        labelId,
         labelId,
         labelId,
       );
@@ -5375,18 +5377,17 @@ export class BaileysStartupService extends ChannelStartupService {
         `INSERT INTO Chat (id, instanceId, remoteJid, labels, createdAt, updatedAt)
          VALUES (?, ?, ?, JSON_ARRAY(), NOW(), NOW())
          ON DUPLICATE KEY UPDATE
-           labels = COALESCE(
-             JSON_REMOVE(
-               labels,
-               JSON_UNQUOTE(JSON_SEARCH(labels, 'one', ?))
-             ),
-             JSON_ARRAY()
+           labels = IF(
+             JSON_CONTAINS(COALESCE(labels, JSON_ARRAY()), JSON_QUOTE(?)),
+             JSON_REMOVE(labels, JSON_UNQUOTE(JSON_SEARCH(labels, 'one', ?, '!'))),
+             COALESCE(labels, JSON_ARRAY())
            ),
            updatedAt = NOW()`,
         id,
         instanceId,
         chatId,
         labelId,
+        labelId.replace(/[!%_]/g, '!$&'),
       );
     } else {
       // PostgreSQL version
@@ -5622,13 +5623,15 @@ export class BaileysStartupService extends ChannelStartupService {
         messageType: query?.where?.messageType,
         ...timestampFilter,
         AND: [
-          keyFilters?.id ? { key: { path: ['id'], equals: keyFilters?.id } } : {},
-          keyFilters?.fromMe ? { key: { path: ['fromMe'], equals: keyFilters?.fromMe } } : {},
-          keyFilters?.participant ? { key: { path: ['participant'], equals: keyFilters?.participant } } : {},
+          keyFilters?.id ? { key: { path: jsonPath('id'), equals: keyFilters?.id } } : {},
+          keyFilters?.fromMe ? { key: { path: jsonPath('fromMe'), equals: keyFilters?.fromMe } } : {},
+          keyFilters?.participant ? { key: { path: jsonPath('participant'), equals: keyFilters?.participant } } : {},
           {
             OR: [
-              keyFilters?.remoteJid ? { key: { path: ['remoteJid'], equals: keyFilters?.remoteJid } } : {},
-              keyFilters?.remoteJidAlt ? { key: { path: ['remoteJidAlt'], equals: keyFilters?.remoteJidAlt } } : {},
+              keyFilters?.remoteJid ? { key: { path: jsonPath('remoteJid'), equals: keyFilters?.remoteJid } } : {},
+              keyFilters?.remoteJidAlt
+                ? { key: { path: jsonPath('remoteJidAlt'), equals: keyFilters?.remoteJidAlt } }
+                : {},
             ],
           },
         ],
@@ -5651,13 +5654,15 @@ export class BaileysStartupService extends ChannelStartupService {
         messageType: query?.where?.messageType,
         ...timestampFilter,
         AND: [
-          keyFilters?.id ? { key: { path: ['id'], equals: keyFilters?.id } } : {},
-          keyFilters?.fromMe ? { key: { path: ['fromMe'], equals: keyFilters?.fromMe } } : {},
-          keyFilters?.participant ? { key: { path: ['participant'], equals: keyFilters?.participant } } : {},
+          keyFilters?.id ? { key: { path: jsonPath('id'), equals: keyFilters?.id } } : {},
+          keyFilters?.fromMe ? { key: { path: jsonPath('fromMe'), equals: keyFilters?.fromMe } } : {},
+          keyFilters?.participant ? { key: { path: jsonPath('participant'), equals: keyFilters?.participant } } : {},
           {
             OR: [
-              keyFilters?.remoteJid ? { key: { path: ['remoteJid'], equals: keyFilters?.remoteJid } } : {},
-              keyFilters?.remoteJidAlt ? { key: { path: ['remoteJidAlt'], equals: keyFilters?.remoteJidAlt } } : {},
+              keyFilters?.remoteJid ? { key: { path: jsonPath('remoteJid'), equals: keyFilters?.remoteJid } } : {},
+              keyFilters?.remoteJidAlt
+                ? { key: { path: jsonPath('remoteJidAlt'), equals: keyFilters?.remoteJidAlt } }
+                : {},
             ],
           },
         ],
@@ -5963,7 +5968,7 @@ export class BaileysStartupService extends ChannelStartupService {
     const messages = await this.prismaRepository.message.findMany({
       where: {
         instanceId: this.instanceId,
-        AND: [{ key: { path: ['remoteJid'], not: null } }],
+        AND: [{ key: { path: jsonPath('remoteJid'), not: null } }],
       },
       orderBy: { messageTimestamp: 'desc' },
       select: {
