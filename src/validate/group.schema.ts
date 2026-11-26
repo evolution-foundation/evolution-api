@@ -126,6 +126,16 @@ export const updateParticipantsSchema: JSONSchema7 = {
         description: '"participants" must be an array of numeric strings',
       },
     },
+    inviteOnAddFailure: {
+      type: 'boolean',
+      enum: [true, false],
+      description:
+        'When true and action is "add", send a private invite if WhatsApp blocks the add with an add_request response.',
+    },
+    inviteCaption: {
+      type: 'string',
+      description: 'Optional caption for the private invite message sent when inviteOnAddFailure is enabled.',
+    },
   },
   required: ['groupJid', 'action', 'participants'],
   ...isNotEmpty('groupJid', 'action'),

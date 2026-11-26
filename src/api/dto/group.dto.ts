@@ -45,6 +45,10 @@ export class GroupSendInvite {
 export class GroupUpdateParticipantDto extends GroupJid {
   action: 'add' | 'remove' | 'promote' | 'demote';
   participants: string[];
+  /** Sends a private invite when an add action is blocked by WhatsApp privacy settings. */
+  inviteOnAddFailure?: boolean;
+  /** Optional caption used for the private invite message. */
+  inviteCaption?: string;
 }
 
 export class GroupUpdateSettingDto extends GroupJid {
