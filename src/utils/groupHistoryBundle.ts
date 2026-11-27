@@ -12,6 +12,9 @@ const GROUP_HISTORY_HKDF_INFO = Buffer.from('Group History');
 const HKDF_OUTPUT_LENGTH = 112;
 const MAC_LENGTH = 10;
 const AES_BLOCK_SIZE = 16;
+const TOP_LEVEL_MESSAGE_FIELDS = new Set([1, 3, 4, 5]);
+const ASSOCIATED_MESSAGE_LISTS_FIELD = 2;
+const NESTED_MESSAGE_FIELDS = new Set([1]);
 
 function readVarint(buf: Buffer, offset: number): { value: number; nextOffset: number } {
   let result = 0;
@@ -55,8 +58,12 @@ function skipVarint(buf: Buffer, offset: number): number {
   throw new Error('Malformed GroupHistory protobuf: varint too long');
 }
 
-function parseGroupHistory(buf: Buffer): proto.IWebMessageInfo[] {
-  const entries: proto.IWebMessageInfo[] = [];
+function parseFields(
+  buf: Buffer,
+  entries: proto.IWebMessageInfo[],
+  messageFields: ReadonlySet<number>,
+  nestedField?: number,
+): void {
   let offset = 0;
 
   while (offset < buf.length) {
@@ -75,9 +82,12 @@ function parseGroupHistory(buf: Buffer): proto.IWebMessageInfo[] {
       throw new Error('Malformed GroupHistory protobuf: field number 0');
     }
 
-    if (fieldNumber === 1) {
+    if (messageFields.has(fieldNumber)) {
       if (wireType !== 2) {
-        throw new Error(`Malformed GroupHistory protobuf: unexpected wire type ${wireType} for field 1`);
+        const scope = nestedField === undefined ? ' (nested)' : '';
+        throw new Error(
+          `Malformed GroupHistory protobuf: unexpected wire type ${wireType} for field ${fieldNumber}${scope}`,
+        );
       }
 
       if (entries.length >= GROUP_HISTORY_MAX_ENTRIES) {
@@ -89,12 +99,31 @@ function parseGroupHistory(buf: Buffer): proto.IWebMessageInfo[] {
       offset = lenRes.nextOffset;
 
       if (len > buf.length - offset) {
-        throw new Error('Malformed GroupHistory protobuf: truncated field 1 payload');
+        throw new Error(`Malformed GroupHistory protobuf: truncated field ${fieldNumber} payload`);
       }
 
       const slice = buf.subarray(offset, offset + len);
       offset += len;
       entries.push(proto.WebMessageInfo.decode(slice));
+      continue;
+    }
+
+    if (nestedField !== undefined && fieldNumber === nestedField) {
+      if (wireType !== 2) {
+        throw new Error(`Malformed GroupHistory protobuf: unexpected wire type ${wireType} for field ${fieldNumber}`);
+      }
+
+      const lenRes = readVarint(buf, offset);
+      const len = lenRes.value;
+      offset = lenRes.nextOffset;
+
+      if (len > buf.length - offset) {
+        throw new Error(`Malformed GroupHistory protobuf: truncated field ${fieldNumber} payload`);
+      }
+
+      const slice = buf.subarray(offset, offset + len);
+      offset += len;
+      parseFields(slice, entries, NESTED_MESSAGE_FIELDS);
       continue;
     }
 
@@ -128,7 +157,11 @@ function parseGroupHistory(buf: Buffer): proto.IWebMessageInfo[] {
         throw new Error(`Malformed GroupHistory protobuf: unsupported wire type ${wireType}`);
     }
   }
+}
 
+function parseGroupHistory(buf: Buffer): proto.IWebMessageInfo[] {
+  const entries: proto.IWebMessageInfo[] = [];
+  parseFields(buf, entries, TOP_LEVEL_MESSAGE_FIELDS, ASSOCIATED_MESSAGE_LISTS_FIELD);
   return entries;
 }
 

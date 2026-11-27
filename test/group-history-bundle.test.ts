@@ -17,10 +17,10 @@ function encodeVarint(value: number): Buffer {
   return Buffer.from(bytes);
 }
 
-function encodeField1Message(msgBytes: Uint8Array): Buffer {
-  const tag = encodeVarint((1 << 3) | 2);
-  const len = encodeVarint(msgBytes.length);
-  return Buffer.concat([tag, len, Buffer.from(msgBytes)]);
+function encodeLengthDelimitedField(fieldNumber: number, payload: Uint8Array): Buffer {
+  const tag = encodeVarint((fieldNumber << 3) | 2);
+  const len = encodeVarint(payload.length);
+  return Buffer.concat([tag, len, Buffer.from(payload)]);
 }
 
 function encryptBundle(plaintext: Buffer, mediaKey: Uint8Array): { file: Buffer; fileEncSha256: Buffer } {
@@ -73,21 +73,21 @@ function buildSampleMessages(): proto.IWebMessageInfo[] {
 
 function buildValidPlaintextWithUnknownFields(messages: proto.IWebMessageInfo[]): Buffer {
   const chunks: Buffer[] = [];
-  // Field 2, wire type 0 (varint)
-  chunks.push(encodeVarint((2 << 3) | 0), encodeVarint(42));
-  // Field 3, wire type 1 (64-bit)
-  chunks.push(encodeVarint((3 << 3) | 1), Buffer.alloc(8, 0xaa));
+  // Field 6, wire type 0 (varint)
+  chunks.push(encodeVarint((6 << 3) | 0), encodeVarint(42));
+  // Field 7, wire type 1 (64-bit)
+  chunks.push(encodeVarint((7 << 3) | 1), Buffer.alloc(8, 0xaa));
 
   for (const msg of messages) {
     const encoded = proto.WebMessageInfo.encode(msg).finish();
-    chunks.push(encodeField1Message(encoded));
+    chunks.push(encodeLengthDelimitedField(1, encoded));
   }
 
-  // Field 4, wire type 2 (length-delimited)
+  // Field 8, wire type 2 (length-delimited)
   const extra = Buffer.from('extra-meta');
-  chunks.push(encodeVarint((4 << 3) | 2), encodeVarint(extra.length), extra);
-  // Field 5, wire type 5 (32-bit)
-  chunks.push(encodeVarint((5 << 3) | 5), Buffer.alloc(4, 0x55));
+  chunks.push(encodeVarint((8 << 3) | 2), encodeVarint(extra.length), extra);
+  // Field 9, wire type 5 (32-bit)
+  chunks.push(encodeVarint((9 << 3) | 5), Buffer.alloc(4, 0x55));
 
   return Buffer.concat(chunks);
 }
@@ -163,9 +163,25 @@ describe('decryptGroupHistoryBundle', () => {
       /unexpected wire type/i,
     );
 
+    // 5b-2: wrong wire type (0) for top-level field 3
+    const badWire3 = Buffer.concat([encodeVarint((3 << 3) | 0), encodeVarint(1)]);
+    const encBadWire3 = encryptBundle(badWire3, mediaKey);
+    assert.throws(
+      () => decryptGroupHistoryBundle(encBadWire3.file, mediaKey, encBadWire3.fileEncSha256),
+      /unexpected wire type/i,
+    );
+
+    // 5b-3: wrong wire type (0) for nested field 1 inside field 2
+    const badWireNested1 = encodeLengthDelimitedField(2, Buffer.concat([encodeVarint((1 << 3) | 0), encodeVarint(1)]));
+    const encBadWireNested1 = encryptBundle(badWireNested1, mediaKey);
+    assert.throws(
+      () => decryptGroupHistoryBundle(encBadWireNested1.file, mediaKey, encBadWireNested1.fileEncSha256),
+      /unexpected wire type/i,
+    );
+
     // 5c: unsupported wire type 3 (start group) and wire type 6
     for (const wt of [3, 6, 7]) {
-      const unsupported = encodeVarint((2 << 3) | wt);
+      const unsupported = encodeVarint((6 << 3) | wt);
       const encUnsupported = encryptBundle(unsupported, mediaKey);
       assert.throws(
         () => decryptGroupHistoryBundle(encUnsupported.file, mediaKey, encUnsupported.fileEncSha256),
@@ -177,6 +193,53 @@ describe('decryptGroupHistoryBundle', () => {
   it('6. throws when entry count exceeds GROUP_HISTORY_MAX_ENTRIES', () => {
     const mediaKey = randomBytes(32);
     const plaintext = Buffer.alloc((GROUP_HISTORY_MAX_ENTRIES + 1) * 2, Buffer.from([0x0a, 0x00]));
+    const { file, fileEncSha256 } = encryptBundle(plaintext, mediaKey);
+
+    assert.throws(
+      () => decryptGroupHistoryBundle(file, mediaKey, fileEncSha256),
+      /Malformed GroupHistory protobuf: too many entries/,
+    );
+  });
+
+  it('7. decodes all five GroupHistory message fields in wire order and skips nested unknown fields', () => {
+    const mediaKey = randomBytes(32);
+    const encodeMsg = (id: string) =>
+      proto.WebMessageInfo.encode({
+        key: { id, participant: '1234567890@lid', fromMe: false },
+        messageTimestamp: 1700000010,
+        message: { conversation: id },
+      }).finish();
+
+    const associatedList = Buffer.concat([
+      encodeLengthDelimitedField(1, encodeMsg('MSG_F2_A')),
+      // Skipped submessage field 2 (varint) and field 3 (length-delimited)
+      encodeVarint((2 << 3) | 0),
+      encodeVarint(99),
+      encodeLengthDelimitedField(3, Buffer.from('nested-skip')),
+      encodeLengthDelimitedField(1, encodeMsg('MSG_F2_B')),
+    ]);
+
+    const plaintext = Buffer.concat([
+      encodeLengthDelimitedField(1, encodeMsg('MSG_F1')),
+      encodeLengthDelimitedField(2, associatedList),
+      encodeLengthDelimitedField(3, encodeMsg('MSG_F3')),
+      encodeLengthDelimitedField(4, encodeMsg('MSG_F4')),
+      encodeLengthDelimitedField(5, encodeMsg('MSG_F5')),
+    ]);
+
+    const { file, fileEncSha256 } = encryptBundle(plaintext, mediaKey);
+    const decoded = decryptGroupHistoryBundle(file, mediaKey, fileEncSha256);
+
+    assert.deepEqual(
+      decoded.map((m) => m.key?.id),
+      ['MSG_F1', 'MSG_F2_A', 'MSG_F2_B', 'MSG_F3', 'MSG_F4', 'MSG_F5'],
+    );
+  });
+
+  it('8. enforces GROUP_HISTORY_MAX_ENTRIES across nested field-2 messages', () => {
+    const mediaKey = randomBytes(32);
+    const nestedEntries = Buffer.alloc((GROUP_HISTORY_MAX_ENTRIES + 1) * 2, Buffer.from([0x0a, 0x00]));
+    const plaintext = encodeLengthDelimitedField(2, nestedEntries);
     const { file, fileEncSha256 } = encryptBundle(plaintext, mediaKey);
 
     assert.throws(
