@@ -85,6 +85,11 @@ import { createId as cuid } from '@paralleldrive/cuid2';
 import { Instance, Message } from '@prisma/client';
 import { createJid } from '@utils/createJid';
 import { fetchLatestWaWebVersion } from '@utils/fetchLatestWaWebVersion';
+import {
+  decryptGroupHistoryBundle,
+  GROUP_HISTORY_DOWNLOAD_TIMEOUT_MS,
+  GROUP_HISTORY_MAX_DOWNLOAD_BYTES,
+} from '@utils/groupHistoryBundle';
 import { makeProxyAgent, makeProxyAgentUndici } from '@utils/makeProxyAgent';
 import { getOnWhatsappCache, saveOnWhatsappCache } from '@utils/onWhatsappCache';
 import { status } from '@utils/renderStatus';
@@ -92,7 +97,7 @@ import { sendTelemetry } from '@utils/sendTelemetry';
 import useMultiFileAuthStatePrisma from '@utils/use-multi-file-auth-state-prisma';
 import { AuthStateProvider } from '@utils/use-multi-file-auth-state-provider-files';
 import { useMultiFileAuthStateRedisDb } from '@utils/use-multi-file-auth-state-redis-db';
-import axios from 'axios';
+import axios, { AxiosRequestConfig } from 'axios';
 import makeWASocket, {
   AnyMessageContent,
   BinaryNode,
@@ -114,6 +119,7 @@ import makeWASocket, {
   GetCatalogOptions,
   getContentType,
   getDevice,
+  getUrlFromDirectPath,
   GroupMetadata,
   isJidBroadcast,
   isJidGroup,
@@ -263,6 +269,7 @@ export class BaileysStartupService extends ChannelStartupService {
   private isDeleting = false; // Flag to prevent reconnection during deletion
   private logBaileys = this.configService.get<Log>('LOG').BAILEYS;
   private eventProcessingQueue: Promise<void> = Promise.resolve();
+  private historyQueue: Promise<void> = Promise.resolve();
   private _lastStream515At = 0;
 
   // Cumulative history sync counters (reset on new sync or completion)
@@ -1039,15 +1046,373 @@ export class BaileysStartupService extends ChannelStartupService {
     },
   };
 
+  private enqueueHistory(task: () => Promise<void>): Promise<void> {
+    const next = this.historyQueue.then(task).catch((error) => {
+      this.logger.error(`History queue task failed: ${(error as Error)?.message ?? error}`);
+    });
+    this.historyQueue = next;
+    return next;
+  }
+
+  private async processGroupHistoryBundle(received: WAMessage): Promise<void> {
+    return this.enqueueHistory(async () => {
+      const groupJid = received.key?.remoteJid;
+      const bundleId = received.key?.id ?? 'unknown';
+
+      try {
+        const bundle = received.message?.messageHistoryBundle;
+        if (!groupJid || !isJidGroup(groupJid)) {
+          return;
+        }
+
+        if (!bundle?.mediaKey || bundle.mediaKey.length !== 32) {
+          this.logger.warn(`GroupHistory bundle ${bundleId} for ${groupJid} missing valid 32-byte mediaKey`);
+          return;
+        }
+
+        if (
+          typeof bundle.directPath !== 'string' ||
+          !bundle.directPath.startsWith('/') ||
+          bundle.directPath.startsWith('//')
+        ) {
+          this.logger.warn(`GroupHistory bundle ${bundleId} for ${groupJid} has invalid directPath`);
+          return;
+        }
+
+        const url = getUrlFromDirectPath(bundle.directPath);
+        const config: AxiosRequestConfig = {
+          responseType: 'arraybuffer',
+          timeout: GROUP_HISTORY_DOWNLOAD_TIMEOUT_MS,
+          maxContentLength: GROUP_HISTORY_MAX_DOWNLOAD_BYTES,
+          maxBodyLength: GROUP_HISTORY_MAX_DOWNLOAD_BYTES,
+        };
+
+        if (this.localProxy?.enabled) {
+          config.httpsAgent = makeProxyAgent({
+            host: this.localProxy.host,
+            port: this.localProxy.port,
+            protocol: this.localProxy.protocol,
+            username: this.localProxy.username,
+            password: this.localProxy.password,
+          });
+        }
+
+        const response = await axios.get(url, config);
+        const file = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data);
+
+        if (file.length > GROUP_HISTORY_MAX_DOWNLOAD_BYTES) {
+          throw new Error(`Downloaded bundle exceeds ${GROUP_HISTORY_MAX_DOWNLOAD_BYTES} bytes (${file.length})`);
+        }
+
+        const decoded = decryptGroupHistoryBundle(file, bundle.mediaKey, bundle.fileEncSha256);
+
+        if (this.endSession || this.isDeleting) {
+          this.logger.info(`Skipping GroupHistory bundle ${bundleId} for ${groupJid}: session ended or deleting`);
+          return;
+        }
+
+        const expectedCount = bundle.messageHistoryMetadata?.messageCount;
+        if (typeof expectedCount === 'number' && decoded.length !== expectedCount) {
+          this.logger.warn(
+            `GroupHistory bundle ${bundleId} for ${groupJid} decoded ${decoded.length} entries, expected ${expectedCount}`,
+          );
+        }
+
+        const messages: WAMessage[] = [];
+        for (const entry of decoded) {
+          if (!entry?.key?.id || !entry.message) {
+            continue;
+          }
+
+          if (entry.key.remoteJid && entry.key.remoteJid !== groupJid) {
+            this.logger.warn(
+              `GroupHistory bundle ${bundleId} skipped entry ${entry.key.id} with mismatched remoteJid for ${groupJid}`,
+            );
+            continue;
+          }
+
+          if (received.key?.fromMe !== true && entry.key.fromMe === true) {
+            this.logger.warn(
+              `GroupHistory bundle ${bundleId} skipped entry ${entry.key.id} with fromMe=true for ${groupJid}`,
+            );
+            continue;
+          }
+
+          const ts = Long.isLong(entry.messageTimestamp)
+            ? entry.messageTimestamp.toNumber()
+            : Number(entry.messageTimestamp);
+          if (!Number.isFinite(ts) || ts <= 0) {
+            continue;
+          }
+
+          entry.key.remoteJid = groupJid;
+          entry.messageTimestamp = ts;
+          messages.push(entry as WAMessage);
+        }
+
+        if (messages.length === 0) {
+          return;
+        }
+
+        await this.handleHistorySet({
+          messages,
+          chats: [],
+          contacts: [],
+        });
+      } catch (error) {
+        this.logger.error(
+          `Failed to process GroupHistory bundle ${bundleId} for ${groupJid ?? 'unknown'}: ${(error as Error)?.message ?? error}`,
+        );
+      }
+    });
+  }
+
+  private async handleHistorySet({
+    messages,
+    chats,
+    contacts,
+    isLatest,
+    progress,
+    syncType,
+  }: {
+    chats: Chat[];
+    contacts: Contact[];
+    messages: WAMessage[];
+    isLatest?: boolean;
+    progress?: number;
+    syncType?: proto.HistorySync.HistorySyncType;
+  }) {
+    try {
+      const hasProgress = typeof progress === 'number';
+
+      if (hasProgress) {
+        if (progress <= this.historySyncLastProgress) {
+          this.historySyncMessageCount = 0;
+          this.historySyncChatCount = 0;
+          this.historySyncContactCount = 0;
+        }
+
+        this.historySyncLastProgress = progress;
+      }
+
+      if (syncType === proto.HistorySync.HistorySyncType.ON_DEMAND) {
+        console.log('received on-demand history sync, messages=', messages);
+      }
+      console.log(
+        `recv ${chats.length} chats, ${contacts.length} contacts, ${messages.length} msgs (is latest: ${isLatest}, progress: ${progress}%), type: ${syncType}`,
+      );
+
+      const instance: InstanceDto = { instanceName: this.instance.name };
+
+      let timestampLimitToImport = null;
+
+      if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED) {
+        const daysLimitToImport = this.localChatwoot?.enabled ? this.localChatwoot.daysLimitImportMessages : 1000;
+
+        const date = new Date();
+        timestampLimitToImport = new Date(date.setDate(date.getDate() - daysLimitToImport)).getTime() / 1000;
+
+        const maxBatchTimestamp = Math.max(...messages.map((message) => message.messageTimestamp as number));
+
+        const processBatch = maxBatchTimestamp >= timestampLimitToImport;
+
+        if (!processBatch) {
+          return;
+        }
+      }
+
+      const contactsMap = new Map();
+      const contactsMapLidJid = new Map();
+
+      for (const contact of contacts) {
+        let jid = null;
+
+        if (contact?.id?.search('@lid') !== -1) {
+          if (contact.phoneNumber) {
+            jid = contact.phoneNumber;
+          }
+        }
+
+        if (!jid) {
+          jid = contact?.id;
+        }
+
+        if (contact.id && (contact.notify || contact.name)) {
+          contactsMap.set(contact.id, { name: contact.name ?? contact.notify, jid });
+        }
+
+        contactsMapLidJid.set(contact.id, { jid });
+      }
+
+      const chatsRaw: { remoteJid: string; remoteLid: string; instanceId: string; name?: string }[] = [];
+      const chatsRepository = new Set(
+        (await this.prismaRepository.chat.findMany({ where: { instanceId: this.instanceId } })).map(
+          (chat) => chat.remoteJid,
+        ),
+      );
+
+      for (const chat of chats) {
+        if (chatsRepository?.has(chat.id)) {
+          continue;
+        }
+
+        let remoteJid = null;
+        let remoteLid = null;
+
+        if (chat.id.search('@lid') !== -1) {
+          const contact = contactsMapLidJid.get(chat.id);
+
+          remoteLid = chat.id;
+
+          if (contact && contact.jid) {
+            remoteJid = contact.jid;
+          }
+        }
+
+        if (!remoteLid && chat.accountLid && chat.accountLid.search('@lid') !== -1) {
+          remoteLid = chat.accountLid;
+        }
+
+        if (!remoteJid) {
+          remoteJid = chat.id;
+        }
+
+        chatsRaw.push({ remoteJid, remoteLid, instanceId: this.instanceId, name: chat.name });
+      }
+
+      if (this.configService.get<Database>('DATABASE').SAVE_DATA.HISTORIC) {
+        const chatsToCreateMany = JSON.parse(JSON.stringify(chatsRaw)).map((chat) => {
+          delete chat.remoteLid;
+          return chat;
+        });
+
+        await this.prismaRepository.chat.createMany({ data: chatsToCreateMany, skipDuplicates: true });
+      }
+
+      if (hasProgress) {
+        this.historySyncChatCount += chatsRaw.length;
+      }
+
+      this.sendDataWebhook(Events.CHATS_SET, chatsRaw);
+
+      const messagesRaw: any[] = [];
+
+      const cachedRepositoryMessages = chatwootImport.getRepositoryMessagesCache(instance);
+      const messagesRepository: Set<string> = new Set(
+        cachedRepositoryMessages ??
+          (
+            await this.prismaRepository.message.findMany({
+              select: { key: true },
+              where: { instanceId: this.instanceId },
+            })
+          ).map((message) => {
+            const key = message.key as { id: string };
+
+            return key.id;
+          }),
+      );
+
+      if (cachedRepositoryMessages === null) {
+        chatwootImport.setRepositoryMessagesCache(instance, messagesRepository);
+      }
+
+      const batchIds = new Set<string>();
+
+      for (const m of messages) {
+        if (!m.message || !m.key || !m.messageTimestamp) {
+          continue;
+        }
+
+        if (Long.isLong(m?.messageTimestamp)) {
+          m.messageTimestamp = m.messageTimestamp?.toNumber();
+        }
+
+        if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED) {
+          if (m.messageTimestamp <= timestampLimitToImport) {
+            continue;
+          }
+        }
+
+        if (messagesRepository?.has(m.key.id) || batchIds.has(m.key.id)) {
+          continue;
+        }
+
+        if (!m.pushName && !m.key.fromMe) {
+          const participantJid = m.participant || m.key.participant || m.key.remoteJid;
+          if (participantJid && contactsMap.has(participantJid)) {
+            m.pushName = contactsMap.get(participantJid).name;
+          } else if (participantJid) {
+            m.pushName = participantJid.split('@')[0];
+          }
+        }
+
+        messagesRaw.push(this.prepareMessage(m));
+        batchIds.add(m.key.id);
+      }
+
+      if (hasProgress) {
+        this.historySyncMessageCount += messagesRaw.length;
+      }
+
+      if (this.configService.get<Database>('DATABASE').SAVE_DATA.HISTORIC) {
+        await this.prismaRepository.message.createMany({ data: messagesRaw, skipDuplicates: true });
+      }
+
+      for (const id of batchIds) {
+        messagesRepository.add(id);
+        cachedRepositoryMessages?.add(id);
+      }
+
+      this.sendDataWebhook(Events.MESSAGES_SET, [...messagesRaw], true, undefined, {
+        isLatest,
+        progress,
+      });
+
+      if (
+        this.configService.get<Chatwoot>('CHATWOOT').ENABLED &&
+        this.localChatwoot?.enabled &&
+        this.localChatwoot.importMessages &&
+        messagesRaw.length > 0
+      ) {
+        this.chatwootService.addHistoryMessages(
+          instance,
+          messagesRaw.filter((msg) => !chatwootImport.isIgnorePhoneNumber(msg.key?.remoteJid)),
+        );
+      }
+
+      const filteredContacts = contacts.filter((c) => !!c.notify || !!c.name);
+      if (hasProgress) {
+        this.historySyncContactCount += filteredContacts.length;
+      }
+
+      if (hasProgress && progress === 100) {
+        this.sendDataWebhook(Events.MESSAGING_HISTORY_SET, {
+          messageCount: this.historySyncMessageCount,
+          chatCount: this.historySyncChatCount,
+          contactCount: this.historySyncContactCount,
+          progress,
+        });
+
+        this.historySyncMessageCount = 0;
+        this.historySyncChatCount = 0;
+        this.historySyncContactCount = 0;
+        this.historySyncLastProgress = -1;
+      }
+
+      await this.contactHandle['contacts.upsert'](
+        filteredContacts.map((c) => ({ id: c.id, name: c.name ?? c.notify })),
+      );
+
+      contacts = undefined;
+      messages = undefined;
+      chats = undefined;
+    } catch (error) {
+      this.logger.error(error);
+    }
+  }
+
   private readonly messageHandle = {
-    'messaging-history.set': async ({
-      messages,
-      chats,
-      contacts,
-      isLatest,
-      progress,
-      syncType,
-    }: {
+    'messaging-history.set': (payload: {
       chats: Chat[];
       contacts: Contact[];
       messages: WAMessage[];
@@ -1055,216 +1420,7 @@ export class BaileysStartupService extends ChannelStartupService {
       progress?: number;
       syncType?: proto.HistorySync.HistorySyncType;
     }) => {
-      try {
-        const normalizedProgress = progress ?? -1;
-
-        if (normalizedProgress <= this.historySyncLastProgress) {
-          this.historySyncMessageCount = 0;
-          this.historySyncChatCount = 0;
-          this.historySyncContactCount = 0;
-        }
-
-        this.historySyncLastProgress = normalizedProgress;
-
-        if (syncType === proto.HistorySync.HistorySyncType.ON_DEMAND) {
-          console.log('received on-demand history sync, messages=', messages);
-        }
-        console.log(
-          `recv ${chats.length} chats, ${contacts.length} contacts, ${messages.length} msgs (is latest: ${isLatest}, progress: ${progress}%), type: ${syncType}`,
-        );
-
-        const instance: InstanceDto = { instanceName: this.instance.name };
-
-        let timestampLimitToImport = null;
-
-        if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED) {
-          const daysLimitToImport = this.localChatwoot?.enabled ? this.localChatwoot.daysLimitImportMessages : 1000;
-
-          const date = new Date();
-          timestampLimitToImport = new Date(date.setDate(date.getDate() - daysLimitToImport)).getTime() / 1000;
-
-          const maxBatchTimestamp = Math.max(...messages.map((message) => message.messageTimestamp as number));
-
-          const processBatch = maxBatchTimestamp >= timestampLimitToImport;
-
-          if (!processBatch) {
-            return;
-          }
-        }
-
-        const contactsMap = new Map();
-        const contactsMapLidJid = new Map();
-
-        for (const contact of contacts) {
-          let jid = null;
-
-          if (contact?.id?.search('@lid') !== -1) {
-            if (contact.phoneNumber) {
-              jid = contact.phoneNumber;
-            }
-          }
-
-          if (!jid) {
-            jid = contact?.id;
-          }
-
-          if (contact.id && (contact.notify || contact.name)) {
-            contactsMap.set(contact.id, { name: contact.name ?? contact.notify, jid });
-          }
-
-          contactsMapLidJid.set(contact.id, { jid });
-        }
-
-        const chatsRaw: { remoteJid: string; remoteLid: string; instanceId: string; name?: string }[] = [];
-        const chatsRepository = new Set(
-          (await this.prismaRepository.chat.findMany({ where: { instanceId: this.instanceId } })).map(
-            (chat) => chat.remoteJid,
-          ),
-        );
-
-        for (const chat of chats) {
-          if (chatsRepository?.has(chat.id)) {
-            continue;
-          }
-
-          let remoteJid = null;
-          let remoteLid = null;
-
-          if (chat.id.search('@lid') !== -1) {
-            const contact = contactsMapLidJid.get(chat.id);
-
-            remoteLid = chat.id;
-
-            if (contact && contact.jid) {
-              remoteJid = contact.jid;
-            }
-          }
-
-          if (!remoteLid && chat.accountLid && chat.accountLid.search('@lid') !== -1) {
-            remoteLid = chat.accountLid;
-          }
-
-          if (!remoteJid) {
-            remoteJid = chat.id;
-          }
-
-          chatsRaw.push({ remoteJid, remoteLid, instanceId: this.instanceId, name: chat.name });
-        }
-
-        if (this.configService.get<Database>('DATABASE').SAVE_DATA.HISTORIC) {
-          const chatsToCreateMany = JSON.parse(JSON.stringify(chatsRaw)).map((chat) => {
-            delete chat.remoteLid;
-            return chat;
-          });
-
-          await this.prismaRepository.chat.createMany({ data: chatsToCreateMany, skipDuplicates: true });
-        }
-
-        this.historySyncChatCount += chatsRaw.length;
-
-        this.sendDataWebhook(Events.CHATS_SET, chatsRaw);
-
-        const messagesRaw: any[] = [];
-
-        const messagesRepository: Set<string> = new Set(
-          chatwootImport.getRepositoryMessagesCache(instance) ??
-            (
-              await this.prismaRepository.message.findMany({
-                select: { key: true },
-                where: { instanceId: this.instanceId },
-              })
-            ).map((message) => {
-              const key = message.key as { id: string };
-
-              return key.id;
-            }),
-        );
-
-        if (chatwootImport.getRepositoryMessagesCache(instance) === null) {
-          chatwootImport.setRepositoryMessagesCache(instance, messagesRepository);
-        }
-
-        for (const m of messages) {
-          if (!m.message || !m.key || !m.messageTimestamp) {
-            continue;
-          }
-
-          if (Long.isLong(m?.messageTimestamp)) {
-            m.messageTimestamp = m.messageTimestamp?.toNumber();
-          }
-
-          if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED) {
-            if (m.messageTimestamp <= timestampLimitToImport) {
-              continue;
-            }
-          }
-
-          if (messagesRepository?.has(m.key.id)) {
-            continue;
-          }
-
-          if (!m.pushName && !m.key.fromMe) {
-            const participantJid = m.participant || m.key.participant || m.key.remoteJid;
-            if (participantJid && contactsMap.has(participantJid)) {
-              m.pushName = contactsMap.get(participantJid).name;
-            } else if (participantJid) {
-              m.pushName = participantJid.split('@')[0];
-            }
-          }
-
-          messagesRaw.push(this.prepareMessage(m));
-        }
-
-        this.historySyncMessageCount += messagesRaw.length;
-
-        if (this.configService.get<Database>('DATABASE').SAVE_DATA.HISTORIC) {
-          await this.prismaRepository.message.createMany({ data: messagesRaw, skipDuplicates: true });
-        }
-
-        this.sendDataWebhook(Events.MESSAGES_SET, [...messagesRaw], true, undefined, {
-          isLatest,
-          progress,
-        });
-
-        if (
-          this.configService.get<Chatwoot>('CHATWOOT').ENABLED &&
-          this.localChatwoot?.enabled &&
-          this.localChatwoot.importMessages &&
-          messagesRaw.length > 0
-        ) {
-          this.chatwootService.addHistoryMessages(
-            instance,
-            messagesRaw.filter((msg) => !chatwootImport.isIgnorePhoneNumber(msg.key?.remoteJid)),
-          );
-        }
-
-        const filteredContacts = contacts.filter((c) => !!c.notify || !!c.name);
-        this.historySyncContactCount += filteredContacts.length;
-
-        if (normalizedProgress === 100) {
-          this.sendDataWebhook(Events.MESSAGING_HISTORY_SET, {
-            messageCount: this.historySyncMessageCount,
-            chatCount: this.historySyncChatCount,
-            contactCount: this.historySyncContactCount,
-            progress: normalizedProgress,
-          });
-
-          this.historySyncMessageCount = 0;
-          this.historySyncChatCount = 0;
-          this.historySyncContactCount = 0;
-          this.historySyncLastProgress = -1;
-        }
-
-        await this.contactHandle['contacts.upsert'](
-          filteredContacts.map((c) => ({ id: c.id, name: c.name ?? c.notify })),
-        );
-
-        contacts = undefined;
-        messages = undefined;
-        chats = undefined;
-      } catch (error) {
-        this.logger.error(error);
-      }
+      return this.enqueueHistory(() => this.handleHistorySet(payload));
     },
 
     'messages.upsert': async (
@@ -1361,6 +1517,10 @@ export class BaileysStartupService extends ChannelStartupService {
 
           if (settings?.groupsIgnore && received.key.remoteJid.includes('@g.us')) {
             continue;
+          }
+
+          if (received.message?.messageHistoryBundle && isJidGroup(received.key?.remoteJid)) {
+            void this.processGroupHistoryBundle(received);
           }
 
           const existingChat = await this.prismaRepository.chat.findFirst({
