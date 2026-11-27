@@ -6,6 +6,7 @@ import { proto } from 'baileys';
 export const GROUP_HISTORY_DOWNLOAD_TIMEOUT_MS = 30_000;
 export const GROUP_HISTORY_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 export const GROUP_HISTORY_MAX_INFLATE_BYTES = 20 * 1024 * 1024;
+export const GROUP_HISTORY_MAX_ENTRIES = 50_000;
 
 const GROUP_HISTORY_HKDF_INFO = Buffer.from('Group History');
 const HKDF_OUTPUT_LENGTH = 112;
@@ -77,6 +78,10 @@ function parseGroupHistory(buf: Buffer): proto.IWebMessageInfo[] {
     if (fieldNumber === 1) {
       if (wireType !== 2) {
         throw new Error(`Malformed GroupHistory protobuf: unexpected wire type ${wireType} for field 1`);
+      }
+
+      if (entries.length >= GROUP_HISTORY_MAX_ENTRIES) {
+        throw new Error('Malformed GroupHistory protobuf: too many entries');
       }
 
       const lenRes = readVarint(buf, offset);
