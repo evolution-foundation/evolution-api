@@ -85,6 +85,11 @@ import { createId as cuid } from '@paralleldrive/cuid2';
 import { Instance, Message } from '@prisma/client';
 import { createJid } from '@utils/createJid';
 import { fetchLatestWaWebVersion } from '@utils/fetchLatestWaWebVersion';
+import {
+  decryptGroupHistoryBundle,
+  GROUP_HISTORY_DOWNLOAD_TIMEOUT_MS,
+  GROUP_HISTORY_MAX_DOWNLOAD_BYTES,
+} from '@utils/groupHistoryBundle';
 import { makeProxyAgent, makeProxyAgentUndici } from '@utils/makeProxyAgent';
 import { getOnWhatsappCache, saveOnWhatsappCache } from '@utils/onWhatsappCache';
 import { status } from '@utils/renderStatus';
@@ -114,6 +119,7 @@ import makeWASocket, {
   GetCatalogOptions,
   getContentType,
   getDevice,
+  getUrlFromDirectPath,
   GroupMetadata,
   isJidBroadcast,
   isJidGroup,
@@ -1039,6 +1045,105 @@ export class BaileysStartupService extends ChannelStartupService {
     },
   };
 
+  private async processGroupHistoryBundle(received: WAMessage): Promise<void> {
+    const groupJid = received.key?.remoteJid;
+    const bundleId = received.key?.id ?? 'unknown';
+
+    try {
+      const bundle = received.message?.messageHistoryBundle;
+      if (!groupJid || !isJidGroup(groupJid)) {
+        return;
+      }
+
+      if (!bundle?.mediaKey || bundle.mediaKey.length !== 32) {
+        this.logger.warn(`GroupHistory bundle ${bundleId} for ${groupJid} missing valid 32-byte mediaKey`);
+        return;
+      }
+
+      if (
+        typeof bundle.directPath !== 'string' ||
+        !bundle.directPath.startsWith('/') ||
+        bundle.directPath.startsWith('//')
+      ) {
+        this.logger.warn(`GroupHistory bundle ${bundleId} for ${groupJid} has invalid directPath`);
+        return;
+      }
+
+      const url = getUrlFromDirectPath(bundle.directPath);
+      const config: Record<string, any> = {
+        responseType: 'arraybuffer',
+        timeout: GROUP_HISTORY_DOWNLOAD_TIMEOUT_MS,
+        maxContentLength: GROUP_HISTORY_MAX_DOWNLOAD_BYTES,
+        maxBodyLength: GROUP_HISTORY_MAX_DOWNLOAD_BYTES,
+      };
+
+      if (this.localProxy?.enabled) {
+        config.httpsAgent = makeProxyAgent({
+          host: this.localProxy.host,
+          port: this.localProxy.port,
+          protocol: this.localProxy.protocol,
+          username: this.localProxy.username,
+          password: this.localProxy.password,
+        });
+      }
+
+      const response = await axios.get(url, config);
+      const file = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data);
+
+      if (file.length > GROUP_HISTORY_MAX_DOWNLOAD_BYTES) {
+        throw new Error(`Downloaded bundle exceeds ${GROUP_HISTORY_MAX_DOWNLOAD_BYTES} bytes (${file.length})`);
+      }
+
+      const decoded = decryptGroupHistoryBundle(file, bundle.mediaKey, bundle.fileEncSha256);
+
+      const expectedCount = bundle.messageHistoryMetadata?.messageCount;
+      if (typeof expectedCount === 'number' && decoded.length !== expectedCount) {
+        this.logger.warn(
+          `GroupHistory bundle ${bundleId} for ${groupJid} decoded ${decoded.length} entries, expected ${expectedCount}`,
+        );
+      }
+
+      const messages: WAMessage[] = [];
+      for (const entry of decoded) {
+        if (!entry?.key?.id || !entry.message) {
+          continue;
+        }
+
+        if (entry.key.remoteJid && entry.key.remoteJid !== groupJid) {
+          this.logger.warn(
+            `GroupHistory bundle ${bundleId} skipped entry ${entry.key.id} with mismatched remoteJid for ${groupJid}`,
+          );
+          continue;
+        }
+
+        const ts = Long.isLong(entry.messageTimestamp)
+          ? entry.messageTimestamp.toNumber()
+          : Number(entry.messageTimestamp);
+        if (!Number.isFinite(ts) || ts <= 0) {
+          continue;
+        }
+
+        entry.key.remoteJid = groupJid;
+        entry.messageTimestamp = ts;
+        messages.push(entry as WAMessage);
+      }
+
+      if (messages.length === 0) {
+        return;
+      }
+
+      await this.messageHandle['messaging-history.set']({
+        messages,
+        chats: [],
+        contacts: [],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to process GroupHistory bundle ${bundleId} for ${groupJid ?? 'unknown'}: ${(error as Error)?.message ?? error}`,
+      );
+    }
+  }
+
   private readonly messageHandle = {
     'messaging-history.set': async ({
       messages,
@@ -1056,15 +1161,17 @@ export class BaileysStartupService extends ChannelStartupService {
       syncType?: proto.HistorySync.HistorySyncType;
     }) => {
       try {
-        const normalizedProgress = progress ?? -1;
+        const hasProgress = typeof progress === 'number';
 
-        if (normalizedProgress <= this.historySyncLastProgress) {
-          this.historySyncMessageCount = 0;
-          this.historySyncChatCount = 0;
-          this.historySyncContactCount = 0;
+        if (hasProgress) {
+          if (progress <= this.historySyncLastProgress) {
+            this.historySyncMessageCount = 0;
+            this.historySyncChatCount = 0;
+            this.historySyncContactCount = 0;
+          }
+
+          this.historySyncLastProgress = progress;
         }
-
-        this.historySyncLastProgress = normalizedProgress;
 
         if (syncType === proto.HistorySync.HistorySyncType.ON_DEMAND) {
           console.log('received on-demand history sync, messages=', messages);
@@ -1160,14 +1267,17 @@ export class BaileysStartupService extends ChannelStartupService {
           await this.prismaRepository.chat.createMany({ data: chatsToCreateMany, skipDuplicates: true });
         }
 
-        this.historySyncChatCount += chatsRaw.length;
+        if (hasProgress) {
+          this.historySyncChatCount += chatsRaw.length;
+        }
 
         this.sendDataWebhook(Events.CHATS_SET, chatsRaw);
 
         const messagesRaw: any[] = [];
 
+        const cachedRepositoryMessages = chatwootImport.getRepositoryMessagesCache(instance);
         const messagesRepository: Set<string> = new Set(
-          chatwootImport.getRepositoryMessagesCache(instance) ??
+          cachedRepositoryMessages ??
             (
               await this.prismaRepository.message.findMany({
                 select: { key: true },
@@ -1180,7 +1290,7 @@ export class BaileysStartupService extends ChannelStartupService {
             }),
         );
 
-        if (chatwootImport.getRepositoryMessagesCache(instance) === null) {
+        if (cachedRepositoryMessages === null) {
           chatwootImport.setRepositoryMessagesCache(instance, messagesRepository);
         }
 
@@ -1213,9 +1323,13 @@ export class BaileysStartupService extends ChannelStartupService {
           }
 
           messagesRaw.push(this.prepareMessage(m));
+          messagesRepository.add(m.key.id);
+          cachedRepositoryMessages?.add(m.key.id);
         }
 
-        this.historySyncMessageCount += messagesRaw.length;
+        if (hasProgress) {
+          this.historySyncMessageCount += messagesRaw.length;
+        }
 
         if (this.configService.get<Database>('DATABASE').SAVE_DATA.HISTORIC) {
           await this.prismaRepository.message.createMany({ data: messagesRaw, skipDuplicates: true });
@@ -1239,14 +1353,16 @@ export class BaileysStartupService extends ChannelStartupService {
         }
 
         const filteredContacts = contacts.filter((c) => !!c.notify || !!c.name);
-        this.historySyncContactCount += filteredContacts.length;
+        if (hasProgress) {
+          this.historySyncContactCount += filteredContacts.length;
+        }
 
-        if (normalizedProgress === 100) {
+        if (hasProgress && progress === 100) {
           this.sendDataWebhook(Events.MESSAGING_HISTORY_SET, {
             messageCount: this.historySyncMessageCount,
             chatCount: this.historySyncChatCount,
             contactCount: this.historySyncContactCount,
-            progress: normalizedProgress,
+            progress,
           });
 
           this.historySyncMessageCount = 0;
@@ -1361,6 +1477,10 @@ export class BaileysStartupService extends ChannelStartupService {
 
           if (settings?.groupsIgnore && received.key.remoteJid.includes('@g.us')) {
             continue;
+          }
+
+          if (received.message?.messageHistoryBundle && isJidGroup(received.key?.remoteJid)) {
+            void this.processGroupHistoryBundle(received);
           }
 
           const existingChat = await this.prismaRepository.chat.findFirst({
